@@ -130,6 +130,75 @@ describe("WakaTime fetcher", () => {
       "Could not resolve to a User with the login of 'noone'",
     );
   });
+
+  // New tests for network error handling
+  it("should handle network errors gracefully (no response object)", async () => {
+    const username = "testuser";
+    // Simulate network error (ECONNREFUSED, ETIMEDOUT, etc.)
+    mock
+      .onGet(
+        `https://wakatime.com/api/v1/users/${username}/stats?is_including_today=true`,
+      )
+      .networkError();
+
+    await expect(fetchWakatimeStats({ username })).rejects.toThrow(
+      "Network error while fetching WakaTime data for user 'testuser'",
+    );
+  });
+
+  it("should handle timeout errors gracefully", async () => {
+    const username = "testuser";
+    // Simulate timeout error
+    mock
+      .onGet(
+        `https://wakatime.com/api/v1/users/${username}/stats?is_including_today=true`,
+      )
+      .timeout();
+
+    await expect(fetchWakatimeStats({ username })).rejects.toThrow(
+      "Network error while fetching WakaTime data for user 'testuser'",
+    );
+  });
+
+  it("should handle HTTP status errors with response object", async () => {
+    const username = "testuser";
+    // Simulate 500 Internal Server Error with response object
+    mock
+      .onGet(
+        `https://wakatime.com/api/v1/users/${username}/stats?is_including_today=true`,
+      )
+      .reply(500, { error: "Internal Server Error" });
+
+    await expect(fetchWakatimeStats({ username })).rejects.toThrow(
+      "Could not resolve to a User with the login of 'testuser'",
+    );
+  });
+
+  it("should handle 401 Unauthorized errors", async () => {
+    const username = "testuser";
+    mock
+      .onGet(
+        `https://wakatime.com/api/v1/users/${username}/stats?is_including_today=true`,
+      )
+      .reply(401, { error: "Unauthorized" });
+
+    await expect(fetchWakatimeStats({ username })).rejects.toThrow(
+      "Could not resolve to a User with the login of 'testuser'",
+    );
+  });
+
+  it("should handle 403 Forbidden errors", async () => {
+    const username = "testuser";
+    mock
+      .onGet(
+        `https://wakatime.com/api/v1/users/${username}/stats?is_including_today=true`,
+      )
+      .reply(403, { error: "Forbidden" });
+
+    await expect(fetchWakatimeStats({ username })).rejects.toThrow(
+      "Could not resolve to a User with the login of 'testuser'",
+    );
+  });
 });
 
 export { wakaTimeData };
