@@ -68,10 +68,9 @@ const retryer = async (fetcher, variables, retries = 0) => {
   } catch (err) {
     // prettier-ignore
     // also checking for bad credentials if any tokens gets invalidated
-    const isBadCredential = err.response.data && err.response.data.message === "Bad credentials";
-    const isAccountSuspended =
-      err.response.data &&
-      err.response.data.message === "Sorry. Your account was suspended.";
+    // Use optional chaining to safely access err.response properties
+    const isBadCredential = err.response?.data?.message === "Bad credentials";
+    const isAccountSuspended = err.response?.data?.message === "Sorry. Your account was suspended.";
 
     if (isBadCredential || isAccountSuspended) {
       logger.log(`PAT_${retries + 1} Failed`);
@@ -79,6 +78,27 @@ const retryer = async (fetcher, variables, retries = 0) => {
       // directly return from the function
       return retryer(fetcher, variables, retries);
     } else {
+      // Handle network errors gracefully when err.response doesn't exist
+      if (!err.response) {
+        // Network-level error (ECONNREFUSED, ETIMEDOUT, DNS failure, etc.)
+        logger.log(`Network error on PAT_${retries + 1}: ${err.message}`);
+        retries++;
+        // Retry with the next token for network errors
+        if (retries <= RETRIES) {
+          return retryer(fetcher, variables, retries);
+        }
+        // If all retries exhausted, return a structured error response
+        return {
+          data: {
+            errors: [
+              {
+                type: "NETWORK_ERROR",
+                message: err.message || "Network connection failed",
+              }
+            ]
+          }
+        };
+      }
       return err.response;
     }
   }
