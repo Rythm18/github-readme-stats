@@ -13,7 +13,7 @@ index c65d6ed..4102e74 100644
 +    // Use optional chaining to safely access err.response properties
 +    const isBadCredential = err.response?.data?.message === "Bad credentials";
 +    const isAccountSuspended = err.response?.data?.message === "Sorry. Your account was suspended.";
- 
+
      if (isBadCredential || isAccountSuspended) {
        logger.log(`PAT_${retries + 1} Failed`);
 @@ -79,6 +78,27 @@ const retryer = async (fetcher, variables, retries = 0) => {
@@ -49,7 +49,7 @@ index a081dbd..8dc095e 100644
 --- a/src/fetchers/wakatime.js
 +++ b/src/fetchers/wakatime.js
 @@ -23,7 +23,18 @@ const fetchWakatimeStats = async ({ username, api_domain }) => {
- 
+
      return data.data;
    } catch (err) {
 -    if (err.response.status < 200 || err.response.status > 299) {
@@ -61,7 +61,7 @@ index a081dbd..8dc095e 100644
 +        "WAKATIME_NETWORK_ERROR",
 +      );
 +    }
-+    
++
 +    // Safe property access with proper status code checking
 +    const status = err.response.status;
 +    if (status && (status < 200 || status > 299)) {
