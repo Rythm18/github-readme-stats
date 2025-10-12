@@ -1,0 +1,70 @@
+diff --git a/src/common/retryer.js b/src/common/retryer.js
+index c65d6ed..4102e74 100644
+--- a/src/common/retryer.js
++++ b/src/common/retryer.js
+@@ -68,10 +68,9 @@ const retryer = async (fetcher, variables, retries = 0) => {
+   } catch (err) {
+     // prettier-ignore
+     // also checking for bad credentials if any tokens gets invalidated
+-    const isBadCredential = err.response.data && err.response.data.message === "Bad credentials";
+-    const isAccountSuspended =
+-      err.response.data &&
+-      err.response.data.message === "Sorry. Your account was suspended.";
++    // Use optional chaining to safely access err.response properties
++    const isBadCredential = err.response?.data?.message === "Bad credentials";
++    const isAccountSuspended = err.response?.data?.message === "Sorry. Your account was suspended.";
+ 
+     if (isBadCredential || isAccountSuspended) {
+       logger.log(`PAT_${retries + 1} Failed`);
+@@ -79,6 +78,27 @@ const retryer = async (fetcher, variables, retries = 0) => {
+       // directly return from the function
+       return retryer(fetcher, variables, retries);
+     } else {
++      // Handle network errors gracefully when err.response doesn't exist
++      if (!err.response) {
++        // Network-level error (ECONNREFUSED, ETIMEDOUT, DNS failure, etc.)
++        logger.log(`Network error on PAT_${retries + 1}: ${err.message}`);
++        retries++;
++        // Retry with the next token for network errors
++        if (retries <= RETRIES) {
++          return retryer(fetcher, variables, retries);
++        }
++        // If all retries exhausted, return a structured error response
++        return {
++          data: {
++            errors: [
++              {
++                type: "NETWORK_ERROR",
++                message: err.message || "Network connection failed",
++              }
++            ]
++          }
++        };
++      }
+       return err.response;
+     }
+   }
+diff --git a/src/fetchers/wakatime.js b/src/fetchers/wakatime.js
+index a081dbd..8dc095e 100644
+--- a/src/fetchers/wakatime.js
++++ b/src/fetchers/wakatime.js
+@@ -23,7 +23,18 @@ const fetchWakatimeStats = async ({ username, api_domain }) => {
+ 
+     return data.data;
+   } catch (err) {
+-    if (err.response.status < 200 || err.response.status > 299) {
++    // Handle network errors gracefully when err.response doesn't exist
++    if (!err.response) {
++      // Network-level error (ECONNREFUSED, ETIMEDOUT, DNS failure, etc.)
++      throw new CustomError(
++        `Network error while fetching WakaTime data for user '${username}': ${err.message}`,
++        "WAKATIME_NETWORK_ERROR",
++      );
++    }
++    
++    // Safe property access with proper status code checking
++    const status = err.response.status;
++    if (status && (status < 200 || status > 299)) {
+       throw new CustomError(
+         `Could not resolve to a User with the login of '${username}'`,
+         "WAKATIME_USER_NOT_FOUND",
