@@ -12,7 +12,7 @@ afterEach(() => {
 
 describe("WakaTime Network Error Handling - Issue #4510", () => {
   describe("Network Level Errors", () => {
-    it("should handle connection refused errors without crashing", async () => {
+    it("should handle connection refused errors without TypeError crash", async () => {
       const username = "testuser";
       
       mock
@@ -21,12 +21,14 @@ describe("WakaTime Network Error Handling - Issue #4510", () => {
 
       try {
         await fetchWakatimeStats({ username });
+        expect(true).toBe(false);
       } catch (err) {
         expect(err).not.toBeInstanceOf(TypeError);
+        expect(err).toBeDefined();
       }
     });
 
-    it("should handle timeout errors without crashing", async () => {
+    it("should handle timeout errors without TypeError crash", async () => {
       const username = "timeout_user";
       
       mock
@@ -35,12 +37,14 @@ describe("WakaTime Network Error Handling - Issue #4510", () => {
 
       try {
         await fetchWakatimeStats({ username });
+        expect(true).toBe(false);
       } catch (err) {
         expect(err).not.toBeInstanceOf(TypeError);
+        expect(err).toBeDefined();
       }
     });
 
-    it("should handle DNS resolution failures without crashing", async () => {
+    it("should handle DNS resolution failures without TypeError crash", async () => {
       const username = "dns_fail_user";
       
       mock
@@ -49,8 +53,10 @@ describe("WakaTime Network Error Handling - Issue #4510", () => {
 
       try {
         await fetchWakatimeStats({ username });
+        expect(true).toBe(false);
       } catch (err) {
         expect(err).not.toBeInstanceOf(TypeError);
+        expect(err).toBeDefined();
       }
     });
   });
