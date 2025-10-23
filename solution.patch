@@ -1,0 +1,1541 @@
+diff --git a/api/compare.js b/api/compare.js
+new file mode 100644
+index 0000000..a953533
+--- /dev/null
++++ b/api/compare.js
+@@ -0,0 +1,76 @@
++// @ts-check
++
++import { compareUsers, formatComparison } from "../src/compare.js";
++import { fetchStats } from "../src/fetchers/stats.js";
++import { CACHE_TTL } from "../src/common/cache.js";
++
++/**
++ * API handler for comparing multiple GitHub users.
++ *
++ * @param {Object} req Request object
++ * @param {Object} res Response object
++ * @returns {Promise<void>} Promise that resolves when response is sent
++ */
++export default async function compareHandler(req, res) {
++  const { usernames, format = "json" } = req.query;
++
++  // Validate input
++  if (!usernames) {
++    res.status(400);
++    return res.json({
++      error: "Missing required parameter: usernames",
++    });
++  }
++
++  const usernameList = usernames.split(",").map((u) => u.trim());
++
++  if (usernameList.length < 2 || usernameList.length > 5) {
++    res.status(400);
++    return res.json({
++      error: "Please provide between 2-5 usernames",
++    });
++  }
++
++  try {
++    // Fetch stats for all users in parallel
++    const statsPromises = usernameList.map((username) =>
++      fetchStats(username, false, [], false, false, false),
++    );
++
++    const allStats = await Promise.all(statsPromises);
++
++    // Prepare user data for comparison
++    const users = allStats.map((stats, idx) => ({
++      username: usernameList[idx],
++      totalStars: stats.totalStars,
++      totalCommits: stats.totalCommits,
++      totalPRs: stats.totalPRs,
++      totalIssues: stats.totalIssues,
++    }));
++
++    // Compare users
++    const comparison = compareUsers(users);
++
++    // Set cache headers
++    res.setHeader(
++      "Cache-Control",
++      `max-age=${CACHE_TTL.STATS_CARD.DEFAULT}, s-maxage=${CACHE_TTL.STATS_CARD.DEFAULT}`,
++    );
++
++    // Format and return response
++    if (format === "markdown") {
++      res.status(200);
++      res.setHeader("Content-Type", "text/markdown");
++      return res.send(formatComparison(comparison, "markdown"));
++    }
++
++    // Default: JSON response
++    res.status(200);
++    return res.json(comparison);
++  } catch (error) {
++    res.status(500);
++    return res.json({
++      error: error instanceof Error ? error.message : "Failed to compare users",
++    });
++  }
++}
+diff --git a/solution.patch b/solution.patch
+new file mode 100644
+index 0000000..2bca351
+--- /dev/null
++++ b/solution.patch
+@@ -0,0 +1,569 @@
++diff --git a/api/compare.js b/api/compare.js
++new file mode 100644
++index 0000000..0137a0f
++--- /dev/null
+++++ b/api/compare.js
++@@ -0,0 +1,75 @@
+++// @ts-check
+++
+++import { compareUsers, formatComparison } from "../src/compare.js";
+++import { fetchStats } from "../src/fetchers/stats.js";
+++import { CACHE_TTL, setCacheHeaders } from "../src/common/cache.js";
+++
+++/**
+++ * API handler for comparing multiple GitHub users.
+++ *
+++ * @param {Object} req Request object
+++ * @param {Object} res Response object
+++ */
+++export default async function compareHandler(req, res) {
+++  const { usernames, format = "json" } = req.query;
+++
+++  // Validate input
+++  if (!usernames) {
+++    res.status(400);
+++    return res.json({
+++      error: "Missing required parameter: usernames",
+++    });
+++  }
+++
+++  const usernameList = usernames.split(",").map((u) => u.trim());
+++
+++  if (usernameList.length < 2 || usernameList.length > 5) {
+++    res.status(400);
+++    return res.json({
+++      error: "Please provide between 2-5 usernames",
+++    });
+++  }
+++
+++  try {
+++    // Fetch stats for all users in parallel
+++    const statsPromises = usernameList.map((username) =>
+++      fetchStats(username, false, [], false, false, false),
+++    );
+++
+++    const allStats = await Promise.all(statsPromises);
+++
+++    // Prepare user data for comparison
+++    const users = allStats.map((stats, idx) => ({
+++      username: usernameList[idx],
+++      totalStars: stats.totalStars,
+++      totalCommits: stats.totalCommits,
+++      totalPRs: stats.totalPRs,
+++      totalIssues: stats.totalIssues,
+++    }));
+++
+++    // Compare users
+++    const comparison = compareUsers(users);
+++
+++    // Set cache headers
+++    res.setHeader(
+++      "Cache-Control",
+++      `max-age=${CACHE_TTL.STATS_CARD.DEFAULT}, s-maxage=${CACHE_TTL.STATS_CARD.DEFAULT}`,
+++    );
+++
+++    // Format and return response
+++    if (format === "markdown") {
+++      res.status(200);
+++      res.setHeader("Content-Type", "text/markdown");
+++      return res.send(formatComparison(comparison, "markdown"));
+++    }
+++
+++    // Default: JSON response
+++    res.status(200);
+++    return res.json(comparison);
+++  } catch (error) {
+++    res.status(500);
+++    return res.json({
+++      error: error instanceof Error ? error.message : "Failed to compare users",
+++    });
+++  }
+++}
++diff --git a/src/compare.js b/src/compare.js
++new file mode 100644
++index 0000000..1026b33
++--- /dev/null
+++++ b/src/compare.js
++@@ -0,0 +1,92 @@
+++// @ts-check
+++
+++/**
+++ * Compare multiple users and determine leader.
+++ *
+++ * @param {Array<Object>} users Array of user stats objects
+++ * @returns {{leader: string, comparisons: Array<Object>, diffs: Object}} Comparison result
+++ */
+++export const compareUsers = (users) => {
+++  if (!users || users.length < 2) {
+++    throw new Error("At least 2 users required for comparison");
+++  }
+++
+++  // Calculate total score for each user
+++  const usersWithScores = users.map((user) => ({
+++    ...user,
+++    score:
+++      (user.totalStars || 0) +
+++      (user.totalCommits || 0) +
+++      (user.totalPRs || 0) +
+++      (user.totalIssues || 0),
+++  }));
+++
+++  // Find leader (highest score)
+++  const leader = usersWithScores.reduce((max, user) =>
+++    user.score > max.score ? user : max,
+++  );
+++
+++  // Calculate differences from leader for each metric
+++  const diffs = {
+++    totalStars: [],
+++    totalCommits: [],
+++    totalPRs: [],
+++    totalIssues: [],
+++  };
+++
+++  usersWithScores.forEach((user) => {
+++    diffs.totalStars.push(
+++      (leader.totalStars || 0) - (user.totalStars || 0),
+++    );
+++    diffs.totalCommits.push(
+++      (leader.totalCommits || 0) - (user.totalCommits || 0),
+++    );
+++    diffs.totalPRs.push((leader.totalPRs || 0) - (user.totalPRs || 0));
+++    diffs.totalIssues.push(
+++      (leader.totalIssues || 0) - (user.totalIssues || 0),
+++    );
+++  });
+++
+++  return {
+++    leader: leader.username,
+++    comparisons: usersWithScores,
+++    diffs,
+++  };
+++};
+++
+++/**
+++ * Format comparison result in specified format.
+++ *
+++ * @param {Object} comparison Comparison result
+++ * @param {string} format Output format (json or markdown)
+++ * @returns {string} Formatted output
+++ */
+++export const formatComparison = (comparison, format = "json") => {
+++  if (format === "markdown") {
+++    let output = `# User Comparison\n\n`;
+++    output += `## Leader: ${comparison.leader}\n\n`;
+++    output += `| Username | Stars | Commits | PRs | Issues | Score |\n`;
+++    output += `|----------|-------|---------|-----|--------|-------|\n`;
+++
+++    comparison.comparisons.forEach((user) => {
+++      output += `| ${user.username} | ${user.totalStars || 0} | ${user.totalCommits || 0} | ${user.totalPRs || 0} | ${user.totalIssues || 0} | ${user.score || 0} |\n`;
+++    });
+++
+++    output += `\n## Differences from Leader\n\n`;
+++    output += `| Username | Stars Diff | Commits Diff | PRs Diff | Issues Diff |\n`;
+++    output += `|----------|------------|--------------|----------|-------------|\n`;
+++
+++    comparison.comparisons.forEach((user, idx) => {
+++      const starsDiff = comparison.diffs.totalStars?.[idx] ?? 0;
+++      const commitsDiff = comparison.diffs.totalCommits?.[idx] ?? 0;
+++      const prsDiff = comparison.diffs.totalPRs?.[idx] ?? 0;
+++      const issuesDiff = comparison.diffs.totalIssues?.[idx] ?? 0;
+++      output += `| ${user.username} | ${starsDiff} | ${commitsDiff} | ${prsDiff} | ${issuesDiff} |\n`;
+++    });
+++
+++    return output;
+++  }
+++
+++  // Default: JSON format
+++  return JSON.stringify(comparison, null, 2);
+++};
++diff --git a/test.sh b/test.sh
++new file mode 100755
++index 0000000..eaa50f4
++--- /dev/null
+++++ b/test.sh
++@@ -0,0 +1,17 @@
+++#!/bin/bash
+++set -e
+++
+++case "$1" in
+++  base)
+++    # Run existing tests - should pass at base commit
+++    npm test -- tests/api.test.js
+++    ;;
+++  new)
+++    # Run newly added tests - should fail before solution
+++    npm test -- tests/compare.test.js tests/api-compare.test.js
+++    ;;
+++  *)
+++    echo "Usage: ./test.sh {base|new}"
+++    exit 1
+++    ;;
+++esac
++diff --git a/tests/api-compare.test.js b/tests/api-compare.test.js
++new file mode 100644
++index 0000000..bb29266
++--- /dev/null
+++++ b/tests/api-compare.test.js
++@@ -0,0 +1,237 @@
+++// @ts-check
+++
+++import { describe, expect, it, jest, beforeEach, afterEach } from "@jest/globals";
+++import axios from "axios";
+++import MockAdapter from "axios-mock-adapter";
+++import compareHandler from "../api/compare.js";
+++
+++const mock = new MockAdapter(axios);
+++
+++const createMockStats = (username, stars, commits, prs, issues) => ({
+++  data: {
+++    user: {
+++      name: username,
+++      repositoriesContributedTo: { totalCount: 10 },
+++      commits: { totalCommitContributions: commits },
+++      reviews: { totalPullRequestReviewContributions: 10 },
+++      pullRequests: { totalCount: prs },
+++      mergedPullRequests: { totalCount: prs - 5 },
+++      openIssues: { totalCount: issues },
+++      closedIssues: { totalCount: 0 },
+++      followers: { totalCount: 0 },
+++      repositoryDiscussions: { totalCount: 0 },
+++      repositoryDiscussionComments: { totalCount: 0 },
+++      repositories: {
+++        totalCount: 1,
+++        nodes: [{ stargazers: { totalCount: stars } }],
+++        pageInfo: { hasNextPage: false, endCursor: "cursor" },
+++      },
+++    },
+++  },
+++});
+++
+++beforeEach(() => {
+++  mock.reset();
+++});
+++
+++afterEach(() => {
+++  mock.reset();
+++});
+++
+++describe("GET /api/compare", () => {
+++  it("should return 400 if no usernames provided", async () => {
+++    const req = { query: {} };
+++    const res = {
+++      status: jest.fn().mockReturnThis(),
+++      json: jest.fn(),
+++      setHeader: jest.fn(),
+++    };
+++
+++    await compareHandler(req, res);
+++
+++    expect(res.status).toHaveBeenCalledWith(400);
+++    expect(res.json).toHaveBeenCalledWith(
+++      expect.objectContaining({
+++        error: expect.stringContaining("usernames"),
+++      }),
+++    );
+++  });
+++
+++  it("should return 400 if less than 2 usernames", async () => {
+++    const req = { query: { usernames: "user1" } };
+++    const res = {
+++      status: jest.fn().mockReturnThis(),
+++      json: jest.fn(),
+++      setHeader: jest.fn(),
+++    };
+++
+++    await compareHandler(req, res);
+++
+++    expect(res.status).toHaveBeenCalledWith(400);
+++    expect(res.json).toHaveBeenCalledWith(
+++      expect.objectContaining({
+++        error: expect.stringContaining("2-5"),
+++      }),
+++    );
+++  });
+++
+++  it("should return 400 if more than 5 usernames", async () => {
+++    const req = { query: { usernames: "u1,u2,u3,u4,u5,u6" } };
+++    const res = {
+++      status: jest.fn().mockReturnThis(),
+++      json: jest.fn(),
+++      setHeader: jest.fn(),
+++    };
+++
+++    await compareHandler(req, res);
+++
+++    expect(res.status).toHaveBeenCalledWith(400);
+++    expect(res.json).toHaveBeenCalledWith(
+++      expect.objectContaining({
+++        error: expect.stringContaining("2-5"),
+++      }),
+++    );
+++  });
+++
+++  it("should compare two users and return JSON", async () => {
+++    mock
+++      .onPost("https://api.github.com/graphql")
+++      .replyOnce(200, createMockStats("user1", 100, 200, 50, 30))
+++      .onPost("https://api.github.com/graphql")
+++      .replyOnce(200, createMockStats("user2", 150, 180, 60, 25));
+++
+++    const req = { query: { usernames: "user1,user2" } };
+++    const res = {
+++      status: jest.fn().mockReturnThis(),
+++      json: jest.fn(),
+++      setHeader: jest.fn(),
+++    };
+++
+++    await compareHandler(req, res);
+++
+++    expect(res.status).toHaveBeenCalledWith(200);
+++    expect(res.json).toHaveBeenCalled();
+++
+++    const response = res.json.mock.calls[0][0];
+++    expect(response.leader).toBeDefined();
+++    expect(response.comparisons).toHaveLength(2);
+++    expect(response.comparisons[0].username).toBe("user1");
+++    expect(response.comparisons[1].username).toBe("user2");
+++  });
+++
+++  it("should include differences in response", async () => {
+++    mock
+++      .onPost("https://api.github.com/graphql")
+++      .replyOnce(200, createMockStats("user1", 100, 200, 50, 30))
+++      .onPost("https://api.github.com/graphql")
+++      .replyOnce(200, createMockStats("user2", 150, 180, 60, 25));
+++
+++    const req = { query: { usernames: "user1,user2" } };
+++    const res = {
+++      status: jest.fn().mockReturnThis(),
+++      json: jest.fn(),
+++      setHeader: jest.fn(),
+++    };
+++
+++    await compareHandler(req, res);
+++
+++    const response = res.json.mock.calls[0][0];
+++    expect(response.diffs).toBeDefined();
+++    expect(response.diffs.totalStars).toBeDefined();
+++    expect(response.diffs.totalCommits).toBeDefined();
+++  });
+++
+++  it("should support format parameter for markdown output", async () => {
+++    mock
+++      .onPost("https://api.github.com/graphql")
+++      .replyOnce(200, createMockStats("user1", 100, 200, 50, 30))
+++      .onPost("https://api.github.com/graphql")
+++      .replyOnce(200, createMockStats("user2", 150, 180, 60, 25));
+++
+++    const req = { query: { usernames: "user1,user2", format: "markdown" } };
+++    const res = {
+++      status: jest.fn().mockReturnThis(),
+++      send: jest.fn(),
+++      setHeader: jest.fn(),
+++    };
+++
+++    await compareHandler(req, res);
+++
+++    expect(res.status).toHaveBeenCalledWith(200);
+++    expect(res.setHeader).toHaveBeenCalledWith("Content-Type", "text/markdown");
+++    expect(res.send).toHaveBeenCalled();
+++
+++    const response = res.send.mock.calls[0][0];
+++    expect(response).toContain("user1");
+++    expect(response).toContain("user2");
+++  });
+++
+++  it("should set cache headers", async () => {
+++    mock
+++      .onPost("https://api.github.com/graphql")
+++      .replyOnce(200, createMockStats("user1", 100, 200, 50, 30))
+++      .onPost("https://api.github.com/graphql")
+++      .replyOnce(200, createMockStats("user2", 150, 180, 60, 25));
+++
+++    const req = { query: { usernames: "user1,user2" } };
+++    const res = {
+++      status: jest.fn().mockReturnThis(),
+++      json: jest.fn(),
+++      setHeader: jest.fn(),
+++    };
+++
+++    await compareHandler(req, res);
+++
+++    expect(res.setHeader).toHaveBeenCalledWith(
+++      "Cache-Control",
+++      expect.stringContaining("max-age"),
+++    );
+++  });
+++
+++  it("should handle errors when fetching user stats", async () => {
+++    mock
+++      .onPost("https://api.github.com/graphql")
+++      .replyOnce(200, { errors: [{ message: "User not found" }] });
+++
+++    const req = { query: { usernames: "user1,user2" } };
+++    const res = {
+++      status: jest.fn().mockReturnThis(),
+++      json: jest.fn(),
+++      setHeader: jest.fn(),
+++    };
+++
+++    await compareHandler(req, res);
+++
+++    expect(res.status).toHaveBeenCalledWith(500);
+++    expect(res.json).toHaveBeenCalledWith(
+++      expect.objectContaining({
+++        error: expect.any(String),
+++      }),
+++    );
+++  });
+++
+++  it("should compare 3-5 users", async () => {
+++    mock
+++      .onPost("https://api.github.com/graphql")
+++      .replyOnce(200, createMockStats("user1", 100, 200, 50, 30))
+++      .onPost("https://api.github.com/graphql")
+++      .replyOnce(200, createMockStats("user2", 150, 180, 60, 25))
+++      .onPost("https://api.github.com/graphql")
+++      .replyOnce(200, createMockStats("user3", 120, 220, 55, 28));
+++
+++    const req = { query: { usernames: "user1,user2,user3" } };
+++    const res = {
+++      status: jest.fn().mockReturnThis(),
+++      json: jest.fn(),
+++      setHeader: jest.fn(),
+++    };
+++
+++    await compareHandler(req, res);
+++
+++    expect(res.status).toHaveBeenCalledWith(200);
+++
+++    const response = res.json.mock.calls[0][0];
+++    expect(response.comparisons).toHaveLength(3);
+++    expect(response.leader).toBeDefined();
+++  });
+++});
++diff --git a/tests/compare.test.js b/tests/compare.test.js
++new file mode 100644
++index 0000000..64f07a4
++--- /dev/null
+++++ b/tests/compare.test.js
++@@ -0,0 +1,118 @@
+++// @ts-check
+++
+++import { describe, expect, it } from "@jest/globals";
+++import { compareUsers, formatComparison } from "../src/compare.js";
+++
+++describe("compareUsers", () => {
+++  it("should compare two users and identify leader", () => {
+++    const users = [
+++      {
+++        username: "user1",
+++        totalStars: 100,
+++        totalCommits: 200,
+++        totalPRs: 50,
+++        totalIssues: 30,
+++      },
+++      {
+++        username: "user2",
+++        totalStars: 150,
+++        totalCommits: 180,
+++        totalPRs: 60,
+++        totalIssues: 25,
+++      },
+++    ];
+++
+++    const result = compareUsers(users);
+++
+++    expect(result.leader).toBe("user2");
+++    expect(result.comparisons).toHaveLength(2);
+++    expect(result.comparisons[0].username).toBe("user1");
+++    expect(result.comparisons[1].username).toBe("user2");
+++  });
+++
+++  it("should calculate differences between users", () => {
+++    const users = [
+++      {
+++        username: "user1",
+++        totalStars: 100,
+++        totalCommits: 200,
+++        totalPRs: 50,
+++        totalIssues: 30,
+++      },
+++      {
+++        username: "user2",
+++        totalStars: 150,
+++        totalCommits: 180,
+++        totalPRs: 60,
+++        totalIssues: 25,
+++      },
+++    ];
+++
+++    const result = compareUsers(users);
+++
+++    expect(result.diffs).toBeDefined();
+++    expect(result.diffs.totalStars).toEqual([0, 50]);
+++    expect(result.diffs.totalCommits).toEqual([20, 0]);
+++  });
+++
+++  it("should handle 3-5 users", () => {
+++    const users = [
+++      { username: "user1", totalStars: 100, totalCommits: 200, totalPRs: 50, totalIssues: 30 },
+++      { username: "user2", totalStars: 150, totalCommits: 180, totalPRs: 60, totalIssues: 25 },
+++      { username: "user3", totalStars: 120, totalCommits: 220, totalPRs: 55, totalIssues: 28 },
+++    ];
+++
+++    const result = compareUsers(users);
+++
+++    expect(result.comparisons).toHaveLength(3);
+++    expect(result.leader).toBeDefined();
+++    expect(result.diffs.totalStars).toHaveLength(3);
+++  });
+++
+++  it("should identify correct leader based on total score", () => {
+++    const users = [
+++      { username: "user1", totalStars: 50, totalCommits: 50, totalPRs: 50, totalIssues: 50 },
+++      { username: "user2", totalStars: 200, totalCommits: 200, totalPRs: 200, totalIssues: 200 },
+++    ];
+++
+++    const result = compareUsers(users);
+++
+++    expect(result.leader).toBe("user2");
+++  });
+++});
+++
+++describe("formatComparison", () => {
+++  it("should format comparison as JSON", () => {
+++    const comparison = {
+++      leader: "user1",
+++      comparisons: [
+++        { username: "user1", totalStars: 100 },
+++        { username: "user2", totalStars: 50 },
+++      ],
+++      diffs: { totalStars: [50, 0] },
+++    };
+++
+++    const result = formatComparison(comparison, "json");
+++
+++    expect(result).toContain("user1");
+++    expect(result).toContain("user2");
+++    expect(() => JSON.parse(result)).not.toThrow();
+++  });
+++
+++  it("should format comparison as markdown", () => {
+++    const comparison = {
+++      leader: "user1",
+++      comparisons: [
+++        { username: "user1", totalStars: 100 },
+++        { username: "user2", totalStars: 50 },
+++      ],
+++      diffs: { totalStars: [50, 0] },
+++    };
+++
+++    const result = formatComparison(comparison, "markdown");
+++
+++    expect(result).toContain("user1");
+++    expect(result).toContain("user2");
+++    expect(result).toContain("#");
+++  });
+++});
+diff --git a/src/compare.js b/src/compare.js
+new file mode 100644
+index 0000000..1026b33
+--- /dev/null
++++ b/src/compare.js
+@@ -0,0 +1,92 @@
++// @ts-check
++
++/**
++ * Compare multiple users and determine leader.
++ *
++ * @param {Array<Object>} users Array of user stats objects
++ * @returns {{leader: string, comparisons: Array<Object>, diffs: Object}} Comparison result
++ */
++export const compareUsers = (users) => {
++  if (!users || users.length < 2) {
++    throw new Error("At least 2 users required for comparison");
++  }
++
++  // Calculate total score for each user
++  const usersWithScores = users.map((user) => ({
++    ...user,
++    score:
++      (user.totalStars || 0) +
++      (user.totalCommits || 0) +
++      (user.totalPRs || 0) +
++      (user.totalIssues || 0),
++  }));
++
++  // Find leader (highest score)
++  const leader = usersWithScores.reduce((max, user) =>
++    user.score > max.score ? user : max,
++  );
++
++  // Calculate differences from leader for each metric
++  const diffs = {
++    totalStars: [],
++    totalCommits: [],
++    totalPRs: [],
++    totalIssues: [],
++  };
++
++  usersWithScores.forEach((user) => {
++    diffs.totalStars.push(
++      (leader.totalStars || 0) - (user.totalStars || 0),
++    );
++    diffs.totalCommits.push(
++      (leader.totalCommits || 0) - (user.totalCommits || 0),
++    );
++    diffs.totalPRs.push((leader.totalPRs || 0) - (user.totalPRs || 0));
++    diffs.totalIssues.push(
++      (leader.totalIssues || 0) - (user.totalIssues || 0),
++    );
++  });
++
++  return {
++    leader: leader.username,
++    comparisons: usersWithScores,
++    diffs,
++  };
++};
++
++/**
++ * Format comparison result in specified format.
++ *
++ * @param {Object} comparison Comparison result
++ * @param {string} format Output format (json or markdown)
++ * @returns {string} Formatted output
++ */
++export const formatComparison = (comparison, format = "json") => {
++  if (format === "markdown") {
++    let output = `# User Comparison\n\n`;
++    output += `## Leader: ${comparison.leader}\n\n`;
++    output += `| Username | Stars | Commits | PRs | Issues | Score |\n`;
++    output += `|----------|-------|---------|-----|--------|-------|\n`;
++
++    comparison.comparisons.forEach((user) => {
++      output += `| ${user.username} | ${user.totalStars || 0} | ${user.totalCommits || 0} | ${user.totalPRs || 0} | ${user.totalIssues || 0} | ${user.score || 0} |\n`;
++    });
++
++    output += `\n## Differences from Leader\n\n`;
++    output += `| Username | Stars Diff | Commits Diff | PRs Diff | Issues Diff |\n`;
++    output += `|----------|------------|--------------|----------|-------------|\n`;
++
++    comparison.comparisons.forEach((user, idx) => {
++      const starsDiff = comparison.diffs.totalStars?.[idx] ?? 0;
++      const commitsDiff = comparison.diffs.totalCommits?.[idx] ?? 0;
++      const prsDiff = comparison.diffs.totalPRs?.[idx] ?? 0;
++      const issuesDiff = comparison.diffs.totalIssues?.[idx] ?? 0;
++      output += `| ${user.username} | ${starsDiff} | ${commitsDiff} | ${prsDiff} | ${issuesDiff} |\n`;
++    });
++
++    return output;
++  }
++
++  // Default: JSON format
++  return JSON.stringify(comparison, null, 2);
++};
+diff --git a/test.patch b/test.patch
+new file mode 100644
+index 0000000..f9e3502
+--- /dev/null
++++ b/test.patch
+@@ -0,0 +1,390 @@
++diff --git a/test.sh b/test.sh
++new file mode 100755
++index 0000000..eaa50f4
++--- /dev/null
+++++ b/test.sh
++@@ -0,0 +1,17 @@
+++#!/bin/bash
+++set -e
+++
+++case "$1" in
+++  base)
+++    # Run existing tests - should pass at base commit
+++    npm test -- tests/api.test.js
+++    ;;
+++  new)
+++    # Run newly added tests - should fail before solution
+++    npm test -- tests/compare.test.js tests/api-compare.test.js
+++    ;;
+++  *)
+++    echo "Usage: ./test.sh {base|new}"
+++    exit 1
+++    ;;
+++esac
++diff --git a/tests/api-compare.test.js b/tests/api-compare.test.js
++new file mode 100644
++index 0000000..bb29266
++--- /dev/null
+++++ b/tests/api-compare.test.js
++@@ -0,0 +1,237 @@
+++// @ts-check
+++
+++import { describe, expect, it, jest, beforeEach, afterEach } from "@jest/globals";
+++import axios from "axios";
+++import MockAdapter from "axios-mock-adapter";
+++import compareHandler from "../api/compare.js";
+++
+++const mock = new MockAdapter(axios);
+++
+++const createMockStats = (username, stars, commits, prs, issues) => ({
+++  data: {
+++    user: {
+++      name: username,
+++      repositoriesContributedTo: { totalCount: 10 },
+++      commits: { totalCommitContributions: commits },
+++      reviews: { totalPullRequestReviewContributions: 10 },
+++      pullRequests: { totalCount: prs },
+++      mergedPullRequests: { totalCount: prs - 5 },
+++      openIssues: { totalCount: issues },
+++      closedIssues: { totalCount: 0 },
+++      followers: { totalCount: 0 },
+++      repositoryDiscussions: { totalCount: 0 },
+++      repositoryDiscussionComments: { totalCount: 0 },
+++      repositories: {
+++        totalCount: 1,
+++        nodes: [{ stargazers: { totalCount: stars } }],
+++        pageInfo: { hasNextPage: false, endCursor: "cursor" },
+++      },
+++    },
+++  },
+++});
+++
+++beforeEach(() => {
+++  mock.reset();
+++});
+++
+++afterEach(() => {
+++  mock.reset();
+++});
+++
+++describe("GET /api/compare", () => {
+++  it("should return 400 if no usernames provided", async () => {
+++    const req = { query: {} };
+++    const res = {
+++      status: jest.fn().mockReturnThis(),
+++      json: jest.fn(),
+++      setHeader: jest.fn(),
+++    };
+++
+++    await compareHandler(req, res);
+++
+++    expect(res.status).toHaveBeenCalledWith(400);
+++    expect(res.json).toHaveBeenCalledWith(
+++      expect.objectContaining({
+++        error: expect.stringContaining("usernames"),
+++      }),
+++    );
+++  });
+++
+++  it("should return 400 if less than 2 usernames", async () => {
+++    const req = { query: { usernames: "user1" } };
+++    const res = {
+++      status: jest.fn().mockReturnThis(),
+++      json: jest.fn(),
+++      setHeader: jest.fn(),
+++    };
+++
+++    await compareHandler(req, res);
+++
+++    expect(res.status).toHaveBeenCalledWith(400);
+++    expect(res.json).toHaveBeenCalledWith(
+++      expect.objectContaining({
+++        error: expect.stringContaining("2-5"),
+++      }),
+++    );
+++  });
+++
+++  it("should return 400 if more than 5 usernames", async () => {
+++    const req = { query: { usernames: "u1,u2,u3,u4,u5,u6" } };
+++    const res = {
+++      status: jest.fn().mockReturnThis(),
+++      json: jest.fn(),
+++      setHeader: jest.fn(),
+++    };
+++
+++    await compareHandler(req, res);
+++
+++    expect(res.status).toHaveBeenCalledWith(400);
+++    expect(res.json).toHaveBeenCalledWith(
+++      expect.objectContaining({
+++        error: expect.stringContaining("2-5"),
+++      }),
+++    );
+++  });
+++
+++  it("should compare two users and return JSON", async () => {
+++    mock
+++      .onPost("https://api.github.com/graphql")
+++      .replyOnce(200, createMockStats("user1", 100, 200, 50, 30))
+++      .onPost("https://api.github.com/graphql")
+++      .replyOnce(200, createMockStats("user2", 150, 180, 60, 25));
+++
+++    const req = { query: { usernames: "user1,user2" } };
+++    const res = {
+++      status: jest.fn().mockReturnThis(),
+++      json: jest.fn(),
+++      setHeader: jest.fn(),
+++    };
+++
+++    await compareHandler(req, res);
+++
+++    expect(res.status).toHaveBeenCalledWith(200);
+++    expect(res.json).toHaveBeenCalled();
+++
+++    const response = res.json.mock.calls[0][0];
+++    expect(response.leader).toBeDefined();
+++    expect(response.comparisons).toHaveLength(2);
+++    expect(response.comparisons[0].username).toBe("user1");
+++    expect(response.comparisons[1].username).toBe("user2");
+++  });
+++
+++  it("should include differences in response", async () => {
+++    mock
+++      .onPost("https://api.github.com/graphql")
+++      .replyOnce(200, createMockStats("user1", 100, 200, 50, 30))
+++      .onPost("https://api.github.com/graphql")
+++      .replyOnce(200, createMockStats("user2", 150, 180, 60, 25));
+++
+++    const req = { query: { usernames: "user1,user2" } };
+++    const res = {
+++      status: jest.fn().mockReturnThis(),
+++      json: jest.fn(),
+++      setHeader: jest.fn(),
+++    };
+++
+++    await compareHandler(req, res);
+++
+++    const response = res.json.mock.calls[0][0];
+++    expect(response.diffs).toBeDefined();
+++    expect(response.diffs.totalStars).toBeDefined();
+++    expect(response.diffs.totalCommits).toBeDefined();
+++  });
+++
+++  it("should support format parameter for markdown output", async () => {
+++    mock
+++      .onPost("https://api.github.com/graphql")
+++      .replyOnce(200, createMockStats("user1", 100, 200, 50, 30))
+++      .onPost("https://api.github.com/graphql")
+++      .replyOnce(200, createMockStats("user2", 150, 180, 60, 25));
+++
+++    const req = { query: { usernames: "user1,user2", format: "markdown" } };
+++    const res = {
+++      status: jest.fn().mockReturnThis(),
+++      send: jest.fn(),
+++      setHeader: jest.fn(),
+++    };
+++
+++    await compareHandler(req, res);
+++
+++    expect(res.status).toHaveBeenCalledWith(200);
+++    expect(res.setHeader).toHaveBeenCalledWith("Content-Type", "text/markdown");
+++    expect(res.send).toHaveBeenCalled();
+++
+++    const response = res.send.mock.calls[0][0];
+++    expect(response).toContain("user1");
+++    expect(response).toContain("user2");
+++  });
+++
+++  it("should set cache headers", async () => {
+++    mock
+++      .onPost("https://api.github.com/graphql")
+++      .replyOnce(200, createMockStats("user1", 100, 200, 50, 30))
+++      .onPost("https://api.github.com/graphql")
+++      .replyOnce(200, createMockStats("user2", 150, 180, 60, 25));
+++
+++    const req = { query: { usernames: "user1,user2" } };
+++    const res = {
+++      status: jest.fn().mockReturnThis(),
+++      json: jest.fn(),
+++      setHeader: jest.fn(),
+++    };
+++
+++    await compareHandler(req, res);
+++
+++    expect(res.setHeader).toHaveBeenCalledWith(
+++      "Cache-Control",
+++      expect.stringContaining("max-age"),
+++    );
+++  });
+++
+++  it("should handle errors when fetching user stats", async () => {
+++    mock
+++      .onPost("https://api.github.com/graphql")
+++      .replyOnce(200, { errors: [{ message: "User not found" }] });
+++
+++    const req = { query: { usernames: "user1,user2" } };
+++    const res = {
+++      status: jest.fn().mockReturnThis(),
+++      json: jest.fn(),
+++      setHeader: jest.fn(),
+++    };
+++
+++    await compareHandler(req, res);
+++
+++    expect(res.status).toHaveBeenCalledWith(500);
+++    expect(res.json).toHaveBeenCalledWith(
+++      expect.objectContaining({
+++        error: expect.any(String),
+++      }),
+++    );
+++  });
+++
+++  it("should compare 3-5 users", async () => {
+++    mock
+++      .onPost("https://api.github.com/graphql")
+++      .replyOnce(200, createMockStats("user1", 100, 200, 50, 30))
+++      .onPost("https://api.github.com/graphql")
+++      .replyOnce(200, createMockStats("user2", 150, 180, 60, 25))
+++      .onPost("https://api.github.com/graphql")
+++      .replyOnce(200, createMockStats("user3", 120, 220, 55, 28));
+++
+++    const req = { query: { usernames: "user1,user2,user3" } };
+++    const res = {
+++      status: jest.fn().mockReturnThis(),
+++      json: jest.fn(),
+++      setHeader: jest.fn(),
+++    };
+++
+++    await compareHandler(req, res);
+++
+++    expect(res.status).toHaveBeenCalledWith(200);
+++
+++    const response = res.json.mock.calls[0][0];
+++    expect(response.comparisons).toHaveLength(3);
+++    expect(response.leader).toBeDefined();
+++  });
+++});
++diff --git a/tests/compare.test.js b/tests/compare.test.js
++new file mode 100644
++index 0000000..64f07a4
++--- /dev/null
+++++ b/tests/compare.test.js
++@@ -0,0 +1,118 @@
+++// @ts-check
+++
+++import { describe, expect, it } from "@jest/globals";
+++import { compareUsers, formatComparison } from "../src/compare.js";
+++
+++describe("compareUsers", () => {
+++  it("should compare two users and identify leader", () => {
+++    const users = [
+++      {
+++        username: "user1",
+++        totalStars: 100,
+++        totalCommits: 200,
+++        totalPRs: 50,
+++        totalIssues: 30,
+++      },
+++      {
+++        username: "user2",
+++        totalStars: 150,
+++        totalCommits: 180,
+++        totalPRs: 60,
+++        totalIssues: 25,
+++      },
+++    ];
+++
+++    const result = compareUsers(users);
+++
+++    expect(result.leader).toBe("user2");
+++    expect(result.comparisons).toHaveLength(2);
+++    expect(result.comparisons[0].username).toBe("user1");
+++    expect(result.comparisons[1].username).toBe("user2");
+++  });
+++
+++  it("should calculate differences between users", () => {
+++    const users = [
+++      {
+++        username: "user1",
+++        totalStars: 100,
+++        totalCommits: 200,
+++        totalPRs: 50,
+++        totalIssues: 30,
+++      },
+++      {
+++        username: "user2",
+++        totalStars: 150,
+++        totalCommits: 180,
+++        totalPRs: 60,
+++        totalIssues: 25,
+++      },
+++    ];
+++
+++    const result = compareUsers(users);
+++
+++    expect(result.diffs).toBeDefined();
+++    expect(result.diffs.totalStars).toEqual([0, 50]);
+++    expect(result.diffs.totalCommits).toEqual([20, 0]);
+++  });
+++
+++  it("should handle 3-5 users", () => {
+++    const users = [
+++      { username: "user1", totalStars: 100, totalCommits: 200, totalPRs: 50, totalIssues: 30 },
+++      { username: "user2", totalStars: 150, totalCommits: 180, totalPRs: 60, totalIssues: 25 },
+++      { username: "user3", totalStars: 120, totalCommits: 220, totalPRs: 55, totalIssues: 28 },
+++    ];
+++
+++    const result = compareUsers(users);
+++
+++    expect(result.comparisons).toHaveLength(3);
+++    expect(result.leader).toBeDefined();
+++    expect(result.diffs.totalStars).toHaveLength(3);
+++  });
+++
+++  it("should identify correct leader based on total score", () => {
+++    const users = [
+++      { username: "user1", totalStars: 50, totalCommits: 50, totalPRs: 50, totalIssues: 50 },
+++      { username: "user2", totalStars: 200, totalCommits: 200, totalPRs: 200, totalIssues: 200 },
+++    ];
+++
+++    const result = compareUsers(users);
+++
+++    expect(result.leader).toBe("user2");
+++  });
+++});
+++
+++describe("formatComparison", () => {
+++  it("should format comparison as JSON", () => {
+++    const comparison = {
+++      leader: "user1",
+++      comparisons: [
+++        { username: "user1", totalStars: 100 },
+++        { username: "user2", totalStars: 50 },
+++      ],
+++      diffs: { totalStars: [50, 0] },
+++    };
+++
+++    const result = formatComparison(comparison, "json");
+++
+++    expect(result).toContain("user1");
+++    expect(result).toContain("user2");
+++    expect(() => JSON.parse(result)).not.toThrow();
+++  });
+++
+++  it("should format comparison as markdown", () => {
+++    const comparison = {
+++      leader: "user1",
+++      comparisons: [
+++        { username: "user1", totalStars: 100 },
+++        { username: "user2", totalStars: 50 },
+++      ],
+++      diffs: { totalStars: [50, 0] },
+++    };
+++
+++    const result = formatComparison(comparison, "markdown");
+++
+++    expect(result).toContain("user1");
+++    expect(result).toContain("user2");
+++    expect(result).toContain("#");
+++  });
+++});
+diff --git a/test.sh b/test.sh
+new file mode 100755
+index 0000000..eaa50f4
+--- /dev/null
++++ b/test.sh
+@@ -0,0 +1,17 @@
++#!/bin/bash
++set -e
++
++case "$1" in
++  base)
++    # Run existing tests - should pass at base commit
++    npm test -- tests/api.test.js
++    ;;
++  new)
++    # Run newly added tests - should fail before solution
++    npm test -- tests/compare.test.js tests/api-compare.test.js
++    ;;
++  *)
++    echo "Usage: ./test.sh {base|new}"
++    exit 1
++    ;;
++esac
+diff --git a/tests/api-compare.test.js b/tests/api-compare.test.js
+new file mode 100644
+index 0000000..bb29266
+--- /dev/null
++++ b/tests/api-compare.test.js
+@@ -0,0 +1,237 @@
++// @ts-check
++
++import { describe, expect, it, jest, beforeEach, afterEach } from "@jest/globals";
++import axios from "axios";
++import MockAdapter from "axios-mock-adapter";
++import compareHandler from "../api/compare.js";
++
++const mock = new MockAdapter(axios);
++
++const createMockStats = (username, stars, commits, prs, issues) => ({
++  data: {
++    user: {
++      name: username,
++      repositoriesContributedTo: { totalCount: 10 },
++      commits: { totalCommitContributions: commits },
++      reviews: { totalPullRequestReviewContributions: 10 },
++      pullRequests: { totalCount: prs },
++      mergedPullRequests: { totalCount: prs - 5 },
++      openIssues: { totalCount: issues },
++      closedIssues: { totalCount: 0 },
++      followers: { totalCount: 0 },
++      repositoryDiscussions: { totalCount: 0 },
++      repositoryDiscussionComments: { totalCount: 0 },
++      repositories: {
++        totalCount: 1,
++        nodes: [{ stargazers: { totalCount: stars } }],
++        pageInfo: { hasNextPage: false, endCursor: "cursor" },
++      },
++    },
++  },
++});
++
++beforeEach(() => {
++  mock.reset();
++});
++
++afterEach(() => {
++  mock.reset();
++});
++
++describe("GET /api/compare", () => {
++  it("should return 400 if no usernames provided", async () => {
++    const req = { query: {} };
++    const res = {
++      status: jest.fn().mockReturnThis(),
++      json: jest.fn(),
++      setHeader: jest.fn(),
++    };
++
++    await compareHandler(req, res);
++
++    expect(res.status).toHaveBeenCalledWith(400);
++    expect(res.json).toHaveBeenCalledWith(
++      expect.objectContaining({
++        error: expect.stringContaining("usernames"),
++      }),
++    );
++  });
++
++  it("should return 400 if less than 2 usernames", async () => {
++    const req = { query: { usernames: "user1" } };
++    const res = {
++      status: jest.fn().mockReturnThis(),
++      json: jest.fn(),
++      setHeader: jest.fn(),
++    };
++
++    await compareHandler(req, res);
++
++    expect(res.status).toHaveBeenCalledWith(400);
++    expect(res.json).toHaveBeenCalledWith(
++      expect.objectContaining({
++        error: expect.stringContaining("2-5"),
++      }),
++    );
++  });
++
++  it("should return 400 if more than 5 usernames", async () => {
++    const req = { query: { usernames: "u1,u2,u3,u4,u5,u6" } };
++    const res = {
++      status: jest.fn().mockReturnThis(),
++      json: jest.fn(),
++      setHeader: jest.fn(),
++    };
++
++    await compareHandler(req, res);
++
++    expect(res.status).toHaveBeenCalledWith(400);
++    expect(res.json).toHaveBeenCalledWith(
++      expect.objectContaining({
++        error: expect.stringContaining("2-5"),
++      }),
++    );
++  });
++
++  it("should compare two users and return JSON", async () => {
++    mock
++      .onPost("https://api.github.com/graphql")
++      .replyOnce(200, createMockStats("user1", 100, 200, 50, 30))
++      .onPost("https://api.github.com/graphql")
++      .replyOnce(200, createMockStats("user2", 150, 180, 60, 25));
++
++    const req = { query: { usernames: "user1,user2" } };
++    const res = {
++      status: jest.fn().mockReturnThis(),
++      json: jest.fn(),
++      setHeader: jest.fn(),
++    };
++
++    await compareHandler(req, res);
++
++    expect(res.status).toHaveBeenCalledWith(200);
++    expect(res.json).toHaveBeenCalled();
++
++    const response = res.json.mock.calls[0][0];
++    expect(response.leader).toBeDefined();
++    expect(response.comparisons).toHaveLength(2);
++    expect(response.comparisons[0].username).toBe("user1");
++    expect(response.comparisons[1].username).toBe("user2");
++  });
++
++  it("should include differences in response", async () => {
++    mock
++      .onPost("https://api.github.com/graphql")
++      .replyOnce(200, createMockStats("user1", 100, 200, 50, 30))
++      .onPost("https://api.github.com/graphql")
++      .replyOnce(200, createMockStats("user2", 150, 180, 60, 25));
++
++    const req = { query: { usernames: "user1,user2" } };
++    const res = {
++      status: jest.fn().mockReturnThis(),
++      json: jest.fn(),
++      setHeader: jest.fn(),
++    };
++
++    await compareHandler(req, res);
++
++    const response = res.json.mock.calls[0][0];
++    expect(response.diffs).toBeDefined();
++    expect(response.diffs.totalStars).toBeDefined();
++    expect(response.diffs.totalCommits).toBeDefined();
++  });
++
++  it("should support format parameter for markdown output", async () => {
++    mock
++      .onPost("https://api.github.com/graphql")
++      .replyOnce(200, createMockStats("user1", 100, 200, 50, 30))
++      .onPost("https://api.github.com/graphql")
++      .replyOnce(200, createMockStats("user2", 150, 180, 60, 25));
++
++    const req = { query: { usernames: "user1,user2", format: "markdown" } };
++    const res = {
++      status: jest.fn().mockReturnThis(),
++      send: jest.fn(),
++      setHeader: jest.fn(),
++    };
++
++    await compareHandler(req, res);
++
++    expect(res.status).toHaveBeenCalledWith(200);
++    expect(res.setHeader).toHaveBeenCalledWith("Content-Type", "text/markdown");
++    expect(res.send).toHaveBeenCalled();
++
++    const response = res.send.mock.calls[0][0];
++    expect(response).toContain("user1");
++    expect(response).toContain("user2");
++  });
++
++  it("should set cache headers", async () => {
++    mock
++      .onPost("https://api.github.com/graphql")
++      .replyOnce(200, createMockStats("user1", 100, 200, 50, 30))
++      .onPost("https://api.github.com/graphql")
++      .replyOnce(200, createMockStats("user2", 150, 180, 60, 25));
++
++    const req = { query: { usernames: "user1,user2" } };
++    const res = {
++      status: jest.fn().mockReturnThis(),
++      json: jest.fn(),
++      setHeader: jest.fn(),
++    };
++
++    await compareHandler(req, res);
++
++    expect(res.setHeader).toHaveBeenCalledWith(
++      "Cache-Control",
++      expect.stringContaining("max-age"),
++    );
++  });
++
++  it("should handle errors when fetching user stats", async () => {
++    mock
++      .onPost("https://api.github.com/graphql")
++      .replyOnce(200, { errors: [{ message: "User not found" }] });
++
++    const req = { query: { usernames: "user1,user2" } };
++    const res = {
++      status: jest.fn().mockReturnThis(),
++      json: jest.fn(),
++      setHeader: jest.fn(),
++    };
++
++    await compareHandler(req, res);
++
++    expect(res.status).toHaveBeenCalledWith(500);
++    expect(res.json).toHaveBeenCalledWith(
++      expect.objectContaining({
++        error: expect.any(String),
++      }),
++    );
++  });
++
++  it("should compare 3-5 users", async () => {
++    mock
++      .onPost("https://api.github.com/graphql")
++      .replyOnce(200, createMockStats("user1", 100, 200, 50, 30))
++      .onPost("https://api.github.com/graphql")
++      .replyOnce(200, createMockStats("user2", 150, 180, 60, 25))
++      .onPost("https://api.github.com/graphql")
++      .replyOnce(200, createMockStats("user3", 120, 220, 55, 28));
++
++    const req = { query: { usernames: "user1,user2,user3" } };
++    const res = {
++      status: jest.fn().mockReturnThis(),
++      json: jest.fn(),
++      setHeader: jest.fn(),
++    };
++
++    await compareHandler(req, res);
++
++    expect(res.status).toHaveBeenCalledWith(200);
++
++    const response = res.json.mock.calls[0][0];
++    expect(response.comparisons).toHaveLength(3);
++    expect(response.leader).toBeDefined();
++  });
++});
+diff --git a/tests/compare.test.js b/tests/compare.test.js
+new file mode 100644
+index 0000000..73c5a9c
+--- /dev/null
++++ b/tests/compare.test.js
+@@ -0,0 +1,118 @@
++// @ts-check
++
++import { describe, expect, it } from "@jest/globals";
++import { compareUsers, formatComparison } from "../src/compare.js";
++
++describe("compareUsers", () => {
++  it("should compare two users and identify leader", () => {
++    const users = [
++      {
++        username: "user1",
++        totalStars: 100,
++        totalCommits: 200,
++        totalPRs: 50,
++        totalIssues: 30,
++      },
++      {
++        username: "user2",
++        totalStars: 150,
++        totalCommits: 180,
++        totalPRs: 60,
++        totalIssues: 25,
++      },
++    ];
++
++    const result = compareUsers(users);
++
++    expect(result.leader).toBe("user2");
++    expect(result.comparisons).toHaveLength(2);
++    expect(result.comparisons[0].username).toBe("user1");
++    expect(result.comparisons[1].username).toBe("user2");
++  });
++
++  it("should calculate differences between users", () => {
++    const users = [
++      {
++        username: "user1",
++        totalStars: 100,
++        totalCommits: 200,
++        totalPRs: 50,
++        totalIssues: 30,
++      },
++      {
++        username: "user2",
++        totalStars: 150,
++        totalCommits: 180,
++        totalPRs: 60,
++        totalIssues: 25,
++      },
++    ];
++
++    const result = compareUsers(users);
++
++    expect(result.diffs).toBeDefined();
++    expect(result.diffs.totalStars).toEqual([50, 0]);
++    expect(result.diffs.totalCommits).toEqual([-20, 0]);
++  });
++
++  it("should handle 3-5 users", () => {
++    const users = [
++      { username: "user1", totalStars: 100, totalCommits: 200, totalPRs: 50, totalIssues: 30 },
++      { username: "user2", totalStars: 150, totalCommits: 180, totalPRs: 60, totalIssues: 25 },
++      { username: "user3", totalStars: 120, totalCommits: 220, totalPRs: 55, totalIssues: 28 },
++    ];
++
++    const result = compareUsers(users);
++
++    expect(result.comparisons).toHaveLength(3);
++    expect(result.leader).toBeDefined();
++    expect(result.diffs.totalStars).toHaveLength(3);
++  });
++
++  it("should identify correct leader based on total score", () => {
++    const users = [
++      { username: "user1", totalStars: 50, totalCommits: 50, totalPRs: 50, totalIssues: 50 },
++      { username: "user2", totalStars: 200, totalCommits: 200, totalPRs: 200, totalIssues: 200 },
++    ];
++
++    const result = compareUsers(users);
++
++    expect(result.leader).toBe("user2");
++  });
++});
++
++describe("formatComparison", () => {
++  it("should format comparison as JSON", () => {
++    const comparison = {
++      leader: "user1",
++      comparisons: [
++        { username: "user1", totalStars: 100 },
++        { username: "user2", totalStars: 50 },
++      ],
++      diffs: { totalStars: [50, 0] },
++    };
++
++    const result = formatComparison(comparison, "json");
++
++    expect(result).toContain("user1");
++    expect(result).toContain("user2");
++    expect(() => JSON.parse(result)).not.toThrow();
++  });
++
++  it("should format comparison as markdown", () => {
++    const comparison = {
++      leader: "user1",
++      comparisons: [
++        { username: "user1", totalStars: 100 },
++        { username: "user2", totalStars: 50 },
++      ],
++      diffs: { totalStars: [50, 0] },
++    };
++
++    const result = formatComparison(comparison, "markdown");
++
++    expect(result).toContain("user1");
++    expect(result).toContain("user2");
++    expect(result).toContain("#");
++  });
++});
