@@ -1,19 +1,20 @@
-# Stats Comparison/Diff Endpoint - Feature Specification
+# Stats Comparison Endpoint - Feature Specification (Reduced Scope)
 
 **Feature ID:** #9  
 **Priority:** LOW  
-**Complexity:** MEDIUM-HIGH  
+**Complexity:** MEDIUM  
 **Impact:** LOW-MEDIUM  
-**Estimated Effort:** 5-7 days  
+**Estimated Effort:** 3-4 days  
 **Status:** Proposed  
+**Scope:** Comparison Only (No Historical Tracking)  
 **Last Updated:** 2024
 
 ---
 
 ## Table of Contents
 
+- [Scope Reduction Summary](#scope-reduction-summary)
 - [Problem Statement](#problem-statement)
-- [Context and Background](#context-and-background)
 - [Use Cases](#use-cases)
 - [Solution Overview](#solution-overview)
 - [Detailed Requirements](#detailed-requirements)
@@ -29,252 +30,225 @@
 
 ---
 
+## Scope Reduction Summary
+
+### What's Included ✅
+- Real-time user-to-user comparison endpoint (`/api/compare`)
+- Compare 2-5 GitHub users simultaneously
+- JSON response format (detailed, compact, leaderboard)
+- Difference calculations (absolute and percentage)
+- Leader determination for each metric
+- Caching for performance
+- Rate limiting and access controls
+
+### What's Excluded ❌
+- ~~Historical tracking and snapshots~~
+- ~~`/api/diff` endpoint for progress over time~~
+- ~~Persistent storage infrastructure~~
+- ~~Milestone detection~~
+- ~~Trend analysis~~
+- ~~Growth rate calculations~~
+- ~~Database/Redis storage layer~~
+- ~~Snapshot capture system~~
+- ~~Data retention policies~~
+
+### Rationale for Reduction
+
+1. **Architectural Alignment**: Keeps the service stateless, maintaining consistency with current design
+2. **Reduced Complexity**: Eliminates need for storage infrastructure and data management
+3. **Faster Implementation**: Can be delivered in 3-4 days vs 10 days
+4. **Lower Maintenance**: No storage costs, backup strategies, or retention policies
+5. **Immediate Value**: Provides the core comparison functionality users need most
+6. **Future Extensibility**: Historical tracking can be added later as a separate enhancement
+
+---
+
 ## Problem Statement
 
 ### Current Limitations
 
-Users of GitHub Readme Stats currently face several limitations when trying to understand statistical changes:
+GitHub Readme Stats users cannot easily compare statistics between different GitHub users. Current workarounds require:
 
-1. **No User Comparison**: There is no built-in mechanism to compare GitHub statistics between two different users (e.g., teammates, competitors, or collaborators).
+1. **Manual Fetching**: Opening multiple stat cards in separate tabs/windows
+2. **Manual Calculation**: Copying numbers and calculating differences manually
+3. **No Context**: Absolute values without comparative context
+4. **Time-Consuming**: Tedious process for simple comparisons
+5. **Error-Prone**: Manual calculations lead to mistakes
 
-2. **No Historical Tracking**: Users cannot track their own progress over time. The service generates stats in real-time but doesn't store historical snapshots.
+### Target Users
 
-3. **Manual Comparison Required**: To compare stats, users must:
-   - Fetch multiple cards separately
-   - Manually extract numeric values
-   - Perform calculations themselves
-   - Create their own visualization or analysis
+- **Team Leaders**: Need to compare team members objectively
+- **Open Source Maintainers**: Want to recognize top contributors
+- **Recruiters**: Need to assess candidates comparatively
+- **Developers**: Want to benchmark themselves against peers
+- **Educators**: Need to track student performance
+- **Community Managers**: Want to create leaderboards
 
-4. **No Trend Analysis**: Without historical data, users cannot identify trends such as:
-   - Growth rate in contributions
-   - Changes in rank over time
-   - Evolution of language usage
-   - Contribution patterns
+### Core Problem
 
-5. **Limited Insights**: The current card system shows absolute values but doesn't provide:
-   - Relative performance metrics
-   - Percentage changes
-   - Growth indicators
-   - Comparative context
-
-### Impact
-
-This limitation affects several user groups:
-
-- **Individual Developers**: Cannot track their progress and growth over time
-- **Team Leaders**: Cannot compare team members' contributions objectively
-- **Open Source Maintainers**: Cannot analyze contributor statistics comparatively
-- **Recruiters/HR**: Cannot assess candidate profiles in a comparative context
-- **Educators**: Cannot track student progress in coding bootcamps/courses
-- **Community Managers**: Cannot identify and reward top contributors
-
----
-
-## Context and Background
-
-### Current Architecture
-
-GitHub Readme Stats operates as a stateless serverless application:
-- Fetches data from GitHub API on-demand
-- Renders SVG cards dynamically
-- Uses caching (TTL-based) to reduce API calls
-- No persistent storage beyond cache
-
-### Architectural Constraints
-
-1. **Stateless Design**: Current Vercel serverless functions are ephemeral
-2. **No Database**: No persistent storage layer exists
-3. **Cache-Only**: Redis/Vercel cache is TTL-based and volatile
-4. **GitHub API Limits**: Rate limits restrict frequent data fetching
-5. **Memory Constraints**: Serverless functions have memory limits (128MB configured)
-
-### Why This Feature Matters
-
-1. **User Engagement**: Historical tracking increases user engagement with the platform
-2. **Gamification**: Enables progress tracking and achievement systems
-3. **Analytics**: Provides valuable insights into developer growth
-4. **Competitive Analysis**: Enables healthy competition and benchmarking
-5. **Trend Detection**: Helps identify patterns in contribution behavior
-
-### Related Features
-
-This feature complements existing functionality:
-- Stats Card (provides the base data)
-- Top Languages Card (language comparison potential)
-- WakaTime Card (time-tracking comparison)
-- Rank Calculation (comparative ranking)
+**"I need to compare GitHub statistics between multiple users, but there's no efficient way to do this."**
 
 ---
 
 ## Use Cases
 
-### Use Case 1: User-to-User Comparison
+### Use Case 1: Team Performance Comparison
 
-**Actor**: Developer / Team Lead  
-**Goal**: Compare GitHub statistics between two users
-
-**Scenario**:
-```
-As a team lead, I want to compare the GitHub contributions of two developers
-(Alice and Bob) to understand their relative activity levels and specializations.
-
-Expected Output:
-- Side-by-side statistics
-- Differences highlighted
-- Percentage deltas
-- Visual indicators of who's ahead in each metric
-```
-
-**Example Request**:
-```
-GET /api/compare?user1=alice&user2=bob
-```
-
-**Value**: Objective comparison for performance reviews, team balancing, or friendly competition.
-
----
-
-### Use Case 2: Personal Progress Tracking
-
-**Actor**: Individual Developer  
-**Goal**: Track personal growth over time
+**Actor**: Engineering Manager  
+**Goal**: Compare contributions of team members
 
 **Scenario**:
 ```
-As a developer, I want to see how my GitHub statistics have changed
-over the last 30 days to track my contribution growth and identify patterns.
-
-Expected Output:
-- Current vs. previous statistics
-- Change deltas (absolute and percentage)
-- Growth indicators
-- Improvement suggestions
+As an engineering manager, I want to compare the GitHub activity 
+of Alice, Bob, and Charlie to understand their relative contributions
+and identify areas where team members excel.
 ```
 
 **Example Request**:
-```
-GET /api/diff?username=alice&days=30
-```
-
-**Value**: Personal motivation, goal setting, portfolio building.
-
----
-
-### Use Case 3: Milestone Detection
-
-**Actor**: Open Source Maintainer  
-**Goal**: Identify when contributors hit milestones
-
-**Scenario**:
-```
-As an OSS maintainer, I want to track when contributors cross
-significant thresholds (100 PRs, 1000 stars, etc.) to celebrate
-achievements and maintain community engagement.
-
-Expected Output:
-- Milestone detection
-- Threshold crossing events
-- Achievement badges
-- Trend analysis
-```
-
-**Example Request**:
-```
-GET /api/diff?username=alice&days=7&milestones=true
-```
-
-**Value**: Community building, recognition, retention.
-
----
-
-### Use Case 4: Competitive Leaderboards
-
-**Actor**: Community Manager / Event Organizer  
-**Goal**: Create competitive leaderboards for hackathons or coding challenges
-
-**Scenario**:
-```
-During a month-long coding challenge, I want to compare multiple
-participants' contribution stats to generate dynamic leaderboards.
-
-Expected Output:
-- Multi-user comparison data
-- Rankings by different metrics
-- Progress over challenge duration
-- Delta changes during event period
-```
-
-**Example Request**:
-```
+```bash
 GET /api/compare?user1=alice&user2=bob&user3=charlie&format=leaderboard
 ```
 
-**Value**: Event gamification, participant motivation, transparent competition.
+**Expected Outcome**:
+- Ranked list showing who leads in each metric
+- Percentage differences between team members
+- Clear identification of strengths per developer
+
+**Value**: Objective data for performance reviews and team balancing
 
 ---
 
-### Use Case 5: Team Analytics
+### Use Case 2: Competitive Analysis
 
-**Actor**: Engineering Manager  
-**Goal**: Analyze team contribution patterns over time
+**Actor**: Individual Developer  
+**Goal**: Benchmark against peer developers
 
 **Scenario**:
 ```
-As an engineering manager, I want to understand how my team's
-contribution patterns have evolved over the quarter to inform
-sprint planning and resource allocation.
-
-Expected Output:
-- Team aggregate statistics
-- Individual trends
-- Comparative analysis
-- Velocity indicators
+As a developer, I want to compare my stats with developers I admire
+to understand where I stand and what areas I should focus on improving.
 ```
 
-**Value**: Data-driven management, sprint planning, resource optimization.
+**Example Request**:
+```bash
+GET /api/compare?user1=me&user2=torvalds&format=detailed
+```
+
+**Expected Outcome**:
+- Side-by-side comparison of all metrics
+- Clear indication of gaps and advantages
+- Motivation for improvement
+
+**Value**: Personal growth and goal setting
+
+---
+
+### Use Case 3: Contributor Recognition
+
+**Actor**: Open Source Maintainer  
+**Goal**: Identify top contributors for recognition
+
+**Scenario**:
+```
+As an OSS maintainer, I want to compare my most active contributors
+to create a "Top Contributors" list for my README and community page.
+```
+
+**Example Request**:
+```bash
+GET /api/compare?user1=contributor1&user2=contributor2&user3=contributor3&format=leaderboard
+```
+
+**Expected Outcome**:
+- Leaderboard format with rankings
+- Easy to integrate into documentation
+- Data for community recognition
+
+**Value**: Community building and contributor retention
+
+---
+
+### Use Case 4: Hiring Decision Support
+
+**Actor**: Technical Recruiter  
+**Goal**: Compare candidates objectively
+
+**Scenario**:
+```
+As a recruiter, I have 2-3 candidates with similar resumes and need
+objective data to support my hiring recommendation to the team.
+```
+
+**Example Request**:
+```bash
+GET /api/compare?user1=candidate_a&user2=candidate_b&format=detailed
+```
+
+**Expected Outcome**:
+- Objective comparison of GitHub activity
+- Data-backed insights for decision making
+- Fair evaluation criteria
+
+**Value**: More informed hiring decisions
+
+---
+
+### Use Case 5: Programming Challenge Leaderboard
+
+**Actor**: Hackathon Organizer  
+**Goal**: Create dynamic leaderboards during events
+
+**Scenario**:
+```
+During a month-long coding challenge, I want to compare participants'
+GitHub activity to generate real-time leaderboards.
+```
+
+**Example Request**:
+```bash
+GET /api/compare?user1=alice&user2=bob&user3=charlie&user4=diana&user5=eve&format=leaderboard
+```
+
+**Expected Outcome**:
+- Rankings updated based on latest stats
+- Gamification element for event
+- Transparent competition metrics
+
+**Value**: Event engagement and participant motivation
 
 ---
 
 ## Solution Overview
 
-### Two-Endpoint Approach
+### Single Endpoint Approach
 
-We propose implementing two distinct endpoints with different capabilities:
+We will implement **one endpoint** that provides real-time user comparison:
 
-#### 1. `/api/compare` - User-to-User Comparison (Phase 1)
-- **Stateless**: No historical storage required
-- **Real-time**: Fetches current data for both users
-- **Simple**: Can be implemented immediately
-- **Limited**: Only compares current snapshots
+**`/api/compare`** - User-to-User Comparison
+- **Stateless**: No storage required
+- **Real-time**: Fetches current data for all users
+- **Simple**: Leverages existing `fetchStats` infrastructure
+- **Cacheable**: Uses existing cache mechanisms
+- **Flexible**: Supports 2-5 users per request
 
-#### 2. `/api/diff` - Historical Tracking (Phase 2)
-- **Stateful**: Requires persistent storage
-- **Historical**: Compares against stored snapshots
-- **Complex**: Requires storage infrastructure
-- **Powerful**: Enables trend analysis
+### Key Features
 
-### Implementation Phases
+1. **Parallel Fetching**: Retrieves stats for multiple users concurrently
+2. **Automatic Calculations**: Computes differences and percentages
+3. **Leader Detection**: Identifies who leads in each metric
+4. **Multiple Formats**: Supports detailed, compact, and leaderboard formats
+5. **Error Handling**: Gracefully handles partial failures
+6. **Access Control**: Respects existing whitelist/blacklist
+7. **Rate Limiting**: Prevents abuse
+8. **Caching**: Reduces GitHub API load
 
-**Phase 1: Comparison Endpoint (MVP)**
-- Implement `/api/compare` without storage
-- Focus on real-time user-to-user comparison
-- JSON response format
-- Basic caching strategy
-- ~3-4 days effort
+### Architecture Principles
 
-**Phase 2: Storage Layer (Foundation)**
-- Design snapshot storage schema
-- Implement storage adapter (Redis/Database)
-- Create snapshot capture system
-- Retention policy implementation
-- ~2-3 days effort
-
-**Phase 3: Diff Endpoint (Full Feature)**
-- Implement `/api/diff` with historical data
-- Snapshot comparison logic
-- Trend calculation
-- Milestone detection
-- ~2-3 days effort
+- **Stateless**: No database or persistent storage
+- **Reusable**: Leverages existing fetcher functions
+- **Consistent**: Follows existing API patterns
+- **Performant**: Parallel execution and caching
+- **Secure**: Input validation and rate limiting
 
 ---
 
@@ -282,87 +256,77 @@ We propose implementing two distinct endpoints with different capabilities:
 
 ### Functional Requirements
 
-#### FR-1: Compare Endpoint
-- **MUST** accept two usernames via query parameters
-- **MUST** fetch current stats for both users concurrently
+#### FR-1: User Comparison
+- **MUST** accept 2-5 usernames via query parameters
+- **MUST** fetch current stats for all users
 - **MUST** return JSON format (not SVG)
-- **MUST** include difference calculations (absolute and percentage)
-- **MUST** handle errors gracefully (one user not found, etc.)
-- **SHOULD** support comparison of specific stats only
-- **SHOULD** include rank comparison
-- **COULD** support more than 2 users (up to 5)
+- **MUST** calculate absolute differences between users
+- **MUST** calculate percentage differences
+- **MUST** identify leader for each metric
+- **SHOULD** handle partial failures gracefully
+- **SHOULD** support filtering specific stats
 
-#### FR-2: Diff Endpoint (Phase 2)
-- **MUST** accept username and time period parameters
-- **MUST** fetch current stats and historical snapshot
-- **MUST** calculate changes between timeframes
-- **MUST** return trend indicators (up/down/stable)
-- **SHOULD** detect milestone crossings
-- **SHOULD** support multiple time periods (7, 30, 90 days)
-- **COULD** provide growth rate projections
+#### FR-2: Response Formats
+- **MUST** support `detailed` format (default)
+- **MUST** support `compact` format
+- **MUST** support `leaderboard` format
+- **SHOULD** include metadata (timestamp, cache status)
+- **SHOULD** be easily parseable by client applications
 
 #### FR-3: Data Accuracy
-- **MUST** use the same data fetching logic as existing cards
+- **MUST** use same data fetching logic as stats card
 - **MUST** respect GitHub API rate limits
 - **MUST** apply same filtering rules (exclude_repo, etc.)
-- **SHOULD** include data freshness timestamps
-- **SHOULD** warn about cache staleness
+- **SHOULD** include cache freshness indicators
+- **SHOULD** use consistent calculation methods
 
-#### FR-4: Response Format
-- **MUST** return valid JSON
-- **MUST** include HTTP status codes appropriately
+#### FR-4: Error Handling
+- **MUST** return appropriate HTTP status codes
 - **MUST** provide clear error messages
-- **SHOULD** support multiple output formats (compact, detailed)
-- **COULD** support CSV format for data analysis
+- **MUST** handle invalid usernames
+- **SHOULD** support partial success (some users found)
+- **SHOULD** return helpful error details
 
 ### Non-Functional Requirements
 
 #### NFR-1: Performance
-- Response time **MUST** be under 5 seconds for comparison
-- Response time **SHOULD** be under 2 seconds for diff (cached)
-- Concurrent requests **MUST NOT** cause rate limit exhaustion
-- **MUST** implement request caching
+- Response time **MUST** be under 5 seconds (uncached)
+- Response time **SHOULD** be under 2 seconds (cached)
+- **MUST** fetch users in parallel, not sequentially
+- **MUST** implement caching for repeated requests
 
 #### NFR-2: Scalability
-- **MUST** handle burst traffic without crashes
-- Storage solution **MUST** scale with user growth
-- **SHOULD** implement pagination for large datasets
-- **SHOULD** support horizontal scaling
+- **MUST** handle concurrent requests efficiently
+- **SHOULD** not exhaust GitHub API rate limits
+- **SHOULD** implement request queuing if needed
 
 #### NFR-3: Reliability
-- Endpoint **MUST** have 99% uptime
-- **MUST** handle partial failures gracefully
-- **SHOULD** provide fallback data when historical unavailable
-- **SHOULD** implement retry logic for transient failures
+- **MUST** handle GitHub API errors gracefully
+- **SHOULD** retry transient failures
+- **SHOULD** provide fallback behavior when possible
+- **MUST** not crash on invalid input
 
 #### NFR-4: Security
-- **MUST** respect access controls (whitelist/blacklist)
-- **MUST** implement rate limiting per IP/user
-- **SHOULD** sanitize all input parameters
-- **SHOULD** protect against injection attacks
-- **MUST NOT** expose sensitive PAT information
+- **MUST** validate all input parameters
+- **MUST** sanitize usernames
+- **MUST** apply access controls (whitelist/blacklist)
+- **MUST** implement rate limiting
+- **SHOULD** prevent injection attacks
 
 #### NFR-5: Maintainability
-- Code **MUST** follow existing project conventions
-- **MUST** include comprehensive JSDoc comments
-- **MUST** have unit test coverage > 80%
-- **SHOULD** include integration tests
-- **MUST** update relevant documentation
-
-#### NFR-6: Privacy
-- **MUST** only use publicly available GitHub data
-- **SHOULD** allow users to opt-out of historical tracking
-- **SHOULD** implement data retention policies
-- **MUST** comply with data protection regulations
+- **MUST** follow existing code conventions
+- **MUST** include JSDoc comments
+- **MUST** have test coverage > 80%
+- **SHOULD** be easily extensible
 
 ---
 
 ## API Specification
 
-### Endpoint 1: `/api/compare`
+### Endpoint: `/api/compare`
 
 #### Description
-Compare GitHub statistics between two or more users in real-time.
+Compare GitHub statistics between 2-5 users in real-time.
 
 #### HTTP Method
 `GET`
@@ -376,20 +340,40 @@ Compare GitHub statistics between two or more users in real-time.
 | `user3` | string | No | - | Third GitHub username (optional) |
 | `user4` | string | No | - | Fourth GitHub username (optional) |
 | `user5` | string | No | - | Fifth GitHub username (optional) |
-| `stats` | string | No | `all` | Comma-separated stats to compare: `commits,prs,issues,stars,rank` |
+| `stats` | string | No | `all` | Comma-separated stats to compare (see below) |
 | `format` | string | No | `detailed` | Response format: `detailed`, `compact`, `leaderboard` |
 | `include_all_commits` | boolean | No | `false` | Include all commits (same as stats card) |
 | `exclude_repo` | string | No | - | Repositories to exclude (comma-separated) |
 | `cache_seconds` | number | No | 3600 | Cache duration in seconds |
 
-#### Response Format (Detailed)
+#### Supported Stats Filter
+
+When using the `stats` parameter, you can specify which metrics to compare:
+- `commits` - Total commits
+- `prs` - Total pull requests
+- `prs_merged` - Merged pull requests
+- `reviews` - Pull request reviews
+- `issues` - Issues created
+- `stars` - Total stars received
+- `discussions` - Discussions started
+- `discussions_answered` - Discussions answered
+- `contributed_to` - Repositories contributed to
+- `rank` - GitHub rank
+- `all` - All available stats (default)
+
+**Example**: `stats=commits,prs,stars`
+
+---
+
+### Response Format: Detailed (Default)
 
 ```json
 {
   "comparison": {
     "users": ["alice", "bob"],
     "timestamp": "2024-01-15T10:30:00Z",
-    "cached": false
+    "cached": false,
+    "stats_compared": ["all"]
   },
   "data": {
     "alice": {
@@ -468,22 +452,41 @@ Compare GitHub statistics between two or more users in real-time.
 }
 ```
 
-#### Response Format (Compact)
+---
+
+### Response Format: Compact
 
 ```json
 {
   "users": ["alice", "bob"],
   "timestamp": "2024-01-15T10:30:00Z",
   "diff": {
-    "totalCommits": { "alice": 1234, "bob": 987, "delta": 247, "leader": "alice" },
-    "totalPRs": { "alice": 567, "bob": 432, "delta": 135, "leader": "alice" },
-    "totalStars": { "alice": 4567, "bob": 3456, "delta": 1111, "leader": "alice" }
+    "totalCommits": {
+      "alice": 1234,
+      "bob": 987,
+      "delta": 247,
+      "leader": "alice"
+    },
+    "totalPRs": {
+      "alice": 567,
+      "bob": 432,
+      "delta": 135,
+      "leader": "alice"
+    },
+    "totalStars": {
+      "alice": 4567,
+      "bob": 3456,
+      "delta": 1111,
+      "leader": "alice"
+    }
   },
   "leader": "alice"
 }
 ```
 
-#### Response Format (Leaderboard)
+---
+
+### Response Format: Leaderboard
 
 ```json
 {
@@ -491,257 +494,171 @@ Compare GitHub statistics between two or more users in real-time.
     {
       "rank": 1,
       "username": "alice",
-      "totalScore": 6800,
-      "stats": {
-        "totalCommits": 1234,
-        "totalPRs": 567,
-        "totalStars": 4567,
-        "rank": { "level": "A+", "percentile": 98.5 }
-      }
+      "name": "Alice Smith",
+      "score": {
+        "total": 6801,
+        "breakdown": {
+          "commits": 1234,
+          "prs": 567,
+          "stars": 4567,
+          "rank_percentile": 98.5
+        }
+      },
+      "badges": ["most_commits", "most_stars", "top_rank"]
     },
     {
       "rank": 2,
       "username": "bob",
-      "totalScore": 5374,
-      "stats": {
-        "totalCommits": 987,
-        "totalPRs": 432,
-        "totalStars": 3456,
-        "rank": { "level": "A", "percentile": 95.2 }
-      }
+      "name": "Bob Johnson",
+      "score": {
+        "total": 5374,
+        "breakdown": {
+          "commits": 987,
+          "prs": 432,
+          "stars": 3456,
+          "rank_percentile": 95.2
+        }
+      },
+      "badges": ["high_rank"]
     }
   ],
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-#### Error Responses
-
-```json
-// 400 Bad Request - Missing parameters
-{
-  "error": "Bad Request",
-  "message": "Missing required parameters: user1, user2",
-  "code": "MISSING_PARAMS"
-}
-
-// 404 Not Found - User doesn't exist
-{
-  "error": "Not Found",
-  "message": "User 'nonexistent' not found on GitHub",
-  "code": "USER_NOT_FOUND",
-  "failed_users": ["nonexistent"],
-  "partial_data": { /* data for users that were found */ }
-}
-
-// 429 Too Many Requests - Rate limited
-{
-  "error": "Too Many Requests",
-  "message": "Rate limit exceeded. Try again in 120 seconds.",
-  "code": "RATE_LIMITED",
-  "retry_after": 120
-}
-
-// 500 Internal Server Error
-{
-  "error": "Internal Server Error",
-  "message": "Failed to fetch statistics",
-  "code": "FETCH_ERROR"
-}
-```
-
-#### HTTP Status Codes
-
-- `200 OK` - Successful comparison
-- `206 Partial Content` - Some users found, others failed
-- `400 Bad Request` - Invalid parameters
-- `404 Not Found` - User(s) not found
-- `429 Too Many Requests` - Rate limit exceeded
-- `500 Internal Server Error` - Server error
-- `503 Service Unavailable` - GitHub API unavailable
-
-#### Example Usage
-
-```bash
-# Basic comparison
-curl "https://github-readme-stats.vercel.app/api/compare?user1=torvalds&user2=gvanrossum"
-
-# Compact format
-curl "https://github-readme-stats.vercel.app/api/compare?user1=alice&user2=bob&format=compact"
-
-# Specific stats only
-curl "https://github-readme-stats.vercel.app/api/compare?user1=alice&user2=bob&stats=commits,prs,stars"
-
-# Three-way comparison
-curl "https://github-readme-stats.vercel.app/api/compare?user1=alice&user2=bob&user3=charlie&format=leaderboard"
-```
-
----
-
-### Endpoint 2: `/api/diff` (Phase 2)
-
-#### Description
-Compare a user's current GitHub statistics against their historical data.
-
-#### HTTP Method
-`GET`
-
-#### Query Parameters
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `username` | string | **Yes** | - | GitHub username |
-| `days` | number | No | `30` | Days to look back: `7`, `30`, `90`, `365` |
-| `stats` | string | No | `all` | Comma-separated stats to track |
-| `milestones` | boolean | No | `false` | Include milestone detection |
-| `trends` | boolean | No | `true` | Include trend analysis |
-| `format` | string | No | `detailed` | Response format: `detailed`, `compact` |
-| `include_all_commits` | boolean | No | `false` | Include all commits |
-| `exclude_repo` | string | No | - | Repositories to exclude |
-
-#### Response Format (Detailed)
-
-```json
-{
-  "diff": {
-    "username": "alice",
-    "period": {
-      "days": 30,
-      "start": "2023-12-16T00:00:00Z",
-      "end": "2024-01-15T10:30:00Z"
-    }
-  },
-  "current": {
+  "metadata": {
     "timestamp": "2024-01-15T10:30:00Z",
-    "name": "Alice Smith",
-    "totalCommits": 1234,
-    "totalPRs": 567,
-    "totalPRsMerged": 543,
-    "totalStars": 4567,
-    "rank": { "level": "A+", "percentile": 98.5 }
-  },
-  "previous": {
-    "timestamp": "2023-12-16T00:00:00Z",
-    "totalCommits": 1150,
-    "totalPRs": 540,
-    "totalPRsMerged": 518,
-    "totalStars": 4320,
-    "rank": { "level": "A+", "percentile": 97.8 }
-  },
-  "changes": {
-    "totalCommits": {
-      "previous": 1150,
-      "current": 1234,
-      "absolute": 84,
-      "percentage": 7.30,
-      "trend": "up",
-      "daily_average": 2.8,
-      "growth_rate": "moderate"
-    },
-    "totalPRs": {
-      "previous": 540,
-      "current": 567,
-      "absolute": 27,
-      "percentage": 5.0,
-      "trend": "up",
-      "daily_average": 0.9,
-      "growth_rate": "steady"
-    },
-    "totalStars": {
-      "previous": 4320,
-      "current": 4567,
-      "absolute": 247,
-      "percentage": 5.72,
-      "trend": "up",
-      "daily_average": 8.23,
-      "growth_rate": "moderate"
-    },
-    "rank": {
-      "previous": { "level": "A+", "percentile": 97.8 },
-      "current": { "level": "A+", "percentile": 98.5 },
-      "percentile_change": 0.7,
-      "trend": "up",
-      "level_changed": false
-    }
-  },
-  "milestones": [
-    {
-      "type": "threshold",
-      "stat": "totalCommits",
-      "value": 1200,
-      "achieved_at": "2024-01-10T14:22:00Z",
-      "days_ago": 5
-    }
-  ],
-  "trends": {
-    "most_improved": "totalStars",
-    "stagnant": [],
-    "declining": [],
-    "velocity": {
-      "overall": "increasing",
-      "acceleration": "positive"
-    }
-  },
-  "summary": {
-    "overall_growth": "positive",
-    "stats_improved": 10,
-    "stats_declined": 0,
-    "stats_stable": 0,
-    "milestones_hit": 1,
-    "percentile_rank_change": "improved"
+    "total_users": 2,
+    "scoring_method": "weighted_sum"
   }
 }
 ```
 
-#### Response Format (Compact)
+---
 
+### Error Responses
+
+#### 400 Bad Request - Missing Parameters
 ```json
-{
-  "username": "alice",
-  "period_days": 30,
-  "changes": {
-    "totalCommits": { "delta": 84, "percent": 7.30, "trend": "↑" },
-    "totalPRs": { "delta": 27, "percent": 5.0, "trend": "↑" },
-    "totalStars": { "delta": 247, "percent": 5.72, "trend": "↑" },
-    "rank_percentile": { "delta": 0.7, "trend": "↑" }
-  },
-  "summary": "positive growth"
-}
-```
-
-#### Error Responses
-
-```json
-// 404 Not Found - No historical data
-{
-  "error": "Not Found",
-  "message": "No historical data available for user 'alice' from 30 days ago",
-  "code": "NO_HISTORICAL_DATA",
-  "suggestion": "Historical tracking may not have been enabled, or data retention period has expired"
-}
-
-// 400 Bad Request - Invalid period
 {
   "error": "Bad Request",
-  "message": "Invalid days parameter. Supported values: 7, 30, 90, 365",
-  "code": "INVALID_PERIOD"
+  "message": "Missing required parameters: user1, user2",
+  "code": "MISSING_PARAMS",
+  "details": {
+    "required": ["user1", "user2"],
+    "received": ["user1"]
+  }
 }
 ```
 
-#### Example Usage
+#### 400 Bad Request - Too Many Users
+```json
+{
+  "error": "Bad Request",
+  "message": "Maximum 5 users allowed per comparison",
+  "code": "TOO_MANY_USERS",
+  "details": {
+    "max_allowed": 5,
+    "requested": 7
+  }
+}
+```
 
+#### 404 Not Found - User Doesn't Exist
+```json
+{
+  "error": "Not Found",
+  "message": "One or more users not found on GitHub",
+  "code": "USER_NOT_FOUND",
+  "details": {
+    "failed_users": ["nonexistent"],
+    "found_users": ["alice", "bob"]
+  }
+}
+```
+
+#### 206 Partial Content - Some Users Found
+```json
+{
+  "warning": "Partial Success",
+  "message": "Some users could not be fetched",
+  "code": "PARTIAL_SUCCESS",
+  "failed_users": ["invalid_user"],
+  "comparison": {
+    "users": ["alice", "bob"],
+    "timestamp": "2024-01-15T10:30:00Z"
+  },
+  "data": {
+    "alice": { /* stats */ },
+    "bob": { /* stats */ }
+  },
+  "diff": { /* comparison data */ }
+}
+```
+
+#### 429 Too Many Requests - Rate Limited
+```json
+{
+  "error": "Too Many Requests",
+  "message": "Rate limit exceeded. Try again later.",
+  "code": "RATE_LIMITED",
+  "details": {
+    "retry_after": 120,
+    "limit": 60,
+    "window": "60s"
+  }
+}
+```
+
+#### 500 Internal Server Error
+```json
+{
+  "error": "Internal Server Error",
+  "message": "Failed to fetch statistics from GitHub API",
+  "code": "FETCH_ERROR",
+  "details": {
+    "github_error": "API rate limit exceeded"
+  }
+}
+```
+
+---
+
+### HTTP Status Codes
+
+| Code | Status | Description |
+|------|--------|-------------|
+| 200 | OK | Successful comparison for all users |
+| 206 | Partial Content | Some users found, others failed |
+| 400 | Bad Request | Invalid parameters or input |
+| 404 | Not Found | User(s) not found on GitHub |
+| 429 | Too Many Requests | Rate limit exceeded |
+| 500 | Internal Server Error | Server or GitHub API error |
+| 503 | Service Unavailable | GitHub API temporarily unavailable |
+
+---
+
+### Example Usage
+
+#### Basic Two-User Comparison
 ```bash
-# 30-day progress tracking
-curl "https://github-readme-stats.vercel.app/api/diff?username=alice&days=30"
+curl "https://github-readme-stats.vercel.app/api/compare?user1=torvalds&user2=gvanrossum"
+```
 
-# Weekly update with milestones
-curl "https://github-readme-stats.vercel.app/api/diff?username=alice&days=7&milestones=true"
+#### Three-Way Comparison with Compact Format
+```bash
+curl "https://github-readme-stats.vercel.app/api/compare?user1=alice&user2=bob&user3=charlie&format=compact"
+```
 
-# Compact format for quick checks
-curl "https://github-readme-stats.vercel.app/api/diff?username=alice&format=compact"
+#### Leaderboard Format
+```bash
+curl "https://github-readme-stats.vercel.app/api/compare?user1=alice&user2=bob&user3=charlie&format=leaderboard"
+```
 
-# Specific stats only
-curl "https://github-readme-stats.vercel.app/api/diff?username=alice&stats=commits,prs&days=90"
+#### Specific Stats Only
+```bash
+curl "https://github-readme-stats.vercel.app/api/compare?user1=alice&user2=bob&stats=commits,prs,stars"
+```
+
+#### With Repository Exclusion
+```bash
+curl "https://github-readme-stats.vercel.app/api/compare?user1=alice&user2=bob&exclude_repo=test-repo,old-repo"
 ```
 
 ---
@@ -752,14 +669,17 @@ curl "https://github-readme-stats.vercel.app/api/diff?username=alice&stats=commi
 
 ```typescript
 interface ComparisonResult {
-  comparison: {
-    users: string[];
-    timestamp: string; // ISO 8601
-    cached: boolean;
-  };
+  comparison: ComparisonMetadata;
   data: Record<string, StatsData>;
   diff: Record<string, StatDifference>;
   summary: ComparisonSummary;
+}
+
+interface ComparisonMetadata {
+  users: string[];
+  timestamp: string; // ISO 8601
+  cached: boolean;
+  stats_compared: string[];
 }
 
 interface StatDifference {
@@ -772,98 +692,54 @@ interface StatDifference {
 interface ComparisonSummary {
   overall_leader: string;
   stats_won: Record<string, number>;
-  close_stats: string[];
-  significant_differences: string[];
+  close_stats: string[]; // stats with <5% difference
+  significant_differences: string[]; // stats with >50% difference
 }
 ```
 
-### Diff Result Model
+### Leaderboard Result Model
 
 ```typescript
-interface DiffResult {
-  diff: {
-    username: string;
-    period: {
-      days: number;
-      start: string; // ISO 8601
-      end: string; // ISO 8601
-    };
+interface LeaderboardResult {
+  leaderboard: LeaderboardEntry[];
+  metadata: LeaderboardMetadata;
+}
+
+interface LeaderboardEntry {
+  rank: number;
+  username: string;
+  name: string;
+  score: {
+    total: number;
+    breakdown: Record<string, number>;
   };
-  current: StatsDataWithTimestamp;
-  previous: StatsDataWithTimestamp;
-  changes: Record<string, StatChange>;
-  milestones?: Milestone[];
-  trends?: TrendAnalysis;
-  summary: DiffSummary;
+  badges: string[];
 }
 
-interface StatsDataWithTimestamp extends StatsData {
-  timestamp: string; // ISO 8601
-}
-
-interface StatChange {
-  previous: number;
-  current: number;
-  absolute: number;
-  percentage: number;
-  trend: 'up' | 'down' | 'stable';
-  daily_average?: number;
-  growth_rate?: 'rapid' | 'moderate' | 'steady' | 'slow' | 'stagnant';
-}
-
-interface Milestone {
-  type: 'threshold' | 'rank_change' | 'achievement';
-  stat: string;
-  value: number;
-  achieved_at: string; // ISO 8601
-  days_ago: number;
-}
-
-interface TrendAnalysis {
-  most_improved: string;
-  stagnant: string[];
-  declining: string[];
-  velocity: {
-    overall: 'increasing' | 'decreasing' | 'stable';
-    acceleration: 'positive' | 'negative' | 'neutral';
-  };
-}
-
-interface DiffSummary {
-  overall_growth: 'positive' | 'negative' | 'neutral';
-  stats_improved: number;
-  stats_declined: number;
-  stats_stable: number;
-  milestones_hit: number;
-  percentile_rank_change: 'improved' | 'declined' | 'stable';
+interface LeaderboardMetadata {
+  timestamp: string;
+  total_users: number;
+  scoring_method: string;
 }
 ```
 
-### Snapshot Storage Model (Phase 2)
+### StatsData Model (Existing)
 
 ```typescript
-interface StatsSnapshot {
-  id: string; // Unique snapshot ID
-  username: string;
-  timestamp: string; // ISO 8601
-  data: StatsData;
-  metadata: {
-    github_api_version: string;
-    fetcher_version: string;
-    include_all_commits: boolean;
-    excluded_repos: string[];
-  };
-}
-
-interface SnapshotIndex {
-  username: string;
-  snapshots: {
-    timestamp: string;
-    snapshot_id: string;
-  }[];
-  oldest_snapshot: string; // ISO 8601
-  newest_snapshot: string; // ISO 8601
-  total_snapshots: number;
+// From src/fetchers/types.d.ts
+interface StatsData {
+  name: string;
+  totalPRs: number;
+  totalPRsMerged: number;
+  mergedPRsPercentage: number;
+  totalReviews: number;
+  totalCommits: number;
+  totalIssues: number;
+  totalStars: number;
+  totalDiscussionsStarted: number;
+  totalDiscussionsAnswered: number;
+  contributedTo: number;
+  rank: { level: string; percentile: number };
 }
 ```
 
@@ -874,299 +750,266 @@ interface SnapshotIndex {
 ### System Components
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      API Gateway / Vercel                    │
-└───────────────────────────┬─────────────────────────────────┘
-                            │
-        ┌───────────────────┼───────────────────┐
-        │                   │                   │
-        ▼                   ▼                   ▼
-┌──────────────┐    ┌──────────────┐    ┌──────────────┐
-│  /api/index  │    │ /api/compare │    │  /api/diff   │
-│  (stats card)│    │   (Phase 1)  │    │  (Phase 2)   │
-└──────┬───────┘    └──────┬───────┘    └──────┬───────┘
-       │                   │                   │
-       │                   │                   │
-       └───────────────────┼───────────────────┘
-                           │
-                ┌──────────┴──────────┐
-                │                     │
-                ▼                     ▼
-        ┌──────────────┐      ┌──────────────┐
-        │   Fetchers   │      │   Storage    │
-        │   (stats,    │      │   Adapter    │
-        │   languages) │      │  (Phase 2)   │
-        └──────┬───────┘      └──────┬───────┘
-               │                     │
-               ▼                     ▼
-        ┌──────────────┐      ┌──────────────┐
-        │  GitHub API  │      │   Redis /    │
-        │              │      │   Database   │
-        └──────────────┘      └──────────────┘
+┌─────────────────────────────────────────────────────┐
+│              API Gateway / Vercel                    │
+└───────────────────┬─────────────────────────────────┘
+                    │
+                    ▼
+            ┌──────────────┐
+            │ /api/compare │
+            │   (new)      │
+            └──────┬───────┘
+                   │
+        ┌──────────┼──────────┐
+        │          │          │
+        ▼          ▼          ▼
+   ┌────────┐ ┌────────┐ ┌────────┐
+   │Access  │ │Rate    │ │Cache   │
+   │Guard   │ │Limiter │ │Check   │
+   └────┬───┘ └────┬───┘ └────┬───┘
+        │          │          │
+        └──────────┼──────────┘
+                   │
+                   ▼
+         ┌──────────────────┐
+         │ Comparison Logic  │
+         │   (new module)    │
+         └─────────┬─────────┘
+                   │
+         ┌─────────┴─────────┐
+         │   Parallel Fetch  │
+         │  (Promise.all)    │
+         └─────────┬─────────┘
+                   │
+         ┌─────────┴─────────┐
+         │                   │
+         ▼                   ▼
+    ┌─────────┐         ┌─────────┐
+    │fetchStats         │fetchStats
+    │(user1)  │         │(user2)  │
+    └────┬────┘         └────┬────┘
+         │                   │
+         └─────────┬─────────┘
+                   │
+                   ▼
+         ┌──────────────────┐
+         │  GitHub GraphQL  │
+         │       API        │
+         └──────────────────┘
 ```
 
-### Data Flow - Comparison Endpoint
+### Data Flow
 
 ```
-1. User Request
+1. Request Received
    └─> GET /api/compare?user1=alice&user2=bob
 
-2. Parameter Validation
-   └─> Validate usernames
-   └─> Check whitelist/blacklist
+2. Validation Layer
+   ├─> Validate usernames (github-username-regex)
+   ├─> Check parameter count (2-5 users)
+   ├─> Validate format option
    └─> Sanitize inputs
 
-3. Rate Limiting Check
-   └─> Check IP rate limit
-   └─> Check per-user rate limit
+3. Access Control
+   ├─> Apply whitelist (if configured)
+   ├─> Check blacklist
+   └─> Guard access (existing guardAccess)
 
-4. Cache Check
-   └─> Generate cache key: "compare:alice:bob:timestamp"
-   └─> Check if cached comparison exists
-   └─> If cache hit, return cached data
+4. Rate Limiting
+   ├─> Check IP-based rate limit
+   ├─> Check per-user rate limit
+   └─> Return 429 if exceeded
 
-5. Parallel Data Fetch
-   ├─> Fetch alice's stats (fetchStats)
-   └─> Fetch bob's stats (fetchStats)
+5. Cache Lookup
+   ├─> Generate cache key: "compare:alice:bob:1234567890"
+   ├─> Check cache
+   └─> If hit, return cached data (skip to step 9)
 
-6. Comparison Calculation
-   └─> Calculate differences
-   └─> Calculate percentages
-   └─> Determine leaders
+6. Parallel Stats Fetching
+   ├─> Promise.all([
+   │     fetchStats('alice', ...options),
+   │     fetchStats('bob', ...options)
+   │   ])
+   ├─> Handle partial failures
+   └─> Collect results
+
+7. Comparison Calculations
+   ├─> Calculate absolute differences
+   ├─> Calculate percentages
+   ├─> Determine leaders
+   ├─> Identify close stats
+   ├─> Identify significant differences
    └─> Generate summary
 
-7. Response Formatting
-   └─> Format according to requested format
-   └─> Add metadata (timestamp, cached flag)
+8. Response Formatting
+   ├─> Apply requested format (detailed/compact/leaderboard)
+   ├─> Add metadata (timestamp, cached flag)
+   └─> Build JSON response
 
-8. Cache Result
-   └─> Store in cache with TTL
+9. Cache Storage
+   └─> Store result with TTL (default: 1 hour)
 
-9. Return Response
-   └─> JSON with comparison data
+10. Response Sent
+    └─> Return JSON with appropriate status code
 ```
 
-### Data Flow - Diff Endpoint (Phase 2)
+### Cache Strategy
 
+#### Cache Key Format
 ```
-1. User Request
-   └─> GET /api/diff?username=alice&days=30
-
-2. Parameter Validation
-   └─> Validate username and period
-   └─> Check whitelist/blacklist
-
-3. Historical Data Retrieval
-   └─> Query snapshot index for user
-   └─> Find snapshot closest to target date (30 days ago)
-   └─> Retrieve historical snapshot from storage
-
-4. Current Data Fetch
-   └─> Fetch current stats (fetchStats)
-   └─> Cache current stats
-
-5. Diff Calculation
-   └─> Calculate absolute changes
-   └─> Calculate percentages
-   └─> Determine trends
-   └─> Detect milestones
-   └─> Analyze velocity
-
-6. Response Formatting
-   └─> Build diff response object
-   └─> Add trend indicators
-   └─> Include milestones if requested
-
-7. Return Response
-   └─> JSON with diff data
+compare:{user1}:{user2}:{user3}:{options_hash}
 ```
 
-### Storage Schema (Phase 2)
-
-#### Snapshot Table/Collection
-
-```javascript
-{
-  _id: "snapshot_alice_2024-01-15",
-  username: "alice",
-  timestamp: "2024-01-15T10:30:00Z",
-  ttl: 7776000, // 90 days in seconds
-  data: {
-    totalCommits: 1234,
-    totalPRs: 567,
-    // ... full StatsData
-  },
-  metadata: {
-    github_api_version: "v4",
-    fetcher_version: "1.0.0",
-    include_all_commits: false,
-    excluded_repos: []
-  }
-}
+**Examples**:
+```
+compare:alice:bob:md5(options)
+compare:alice:bob:charlie:md5(options)
 ```
 
-#### Snapshot Index Table/Collection
+#### Cache TTL
+- Default: 3600 seconds (1 hour)
+- Configurable via `cache_seconds` parameter
+- Min: 1800 seconds (30 minutes)
+- Max: 7200 seconds (2 hours)
 
-```javascript
-{
-  _id: "index_alice",
-  username: "alice",
-  snapshots: [
-    { timestamp: "2024-01-15T10:30:00Z", id: "snapshot_alice_2024-01-15" },
-    { timestamp: "2024-01-08T10:30:00Z", id: "snapshot_alice_2024-01-08" },
-    // ... more snapshots
-  ],
-  oldest_snapshot: "2023-10-17T10:30:00Z",
-  newest_snapshot: "2024-01-15T10:30:00Z",
-  total_snapshots: 13
-}
-```
-
-#### Storage Requirements
-
-- **Snapshot Size**: ~2KB per snapshot (compressed JSON)
-- **Storage per User**: ~104KB for 52 snapshots (1 year, weekly)
-- **Storage for 10K Users**: ~1GB
-- **Storage for 100K Users**: ~10GB
-- **Retention**: 90 days default, configurable
-
-#### Storage Options
-
-1. **Redis** (Recommended for Phase 2)
-   - Fast access
-   - TTL support built-in
-   - Existing Vercel integration
-   - Limitations: Memory cost at scale
-
-2. **Vercel KV** (Alternative)
-   - Serverless-friendly
-   - Built-in on Vercel
-   - Good performance
-   - Cost-effective
-
-3. **PostgreSQL/MySQL** (For scale)
-   - Best for large deployments
-   - Complex queries supported
-   - Reliable retention
-   - Requires separate hosting
-
-4. **MongoDB** (Alternative)
-   - Document-based (natural fit)
-   - Good query capabilities
-   - Flexible schema
-   - Requires separate hosting
+#### Cache Invalidation
+- TTL-based expiration (no manual invalidation)
+- Different option combinations create separate cache entries
+- User order matters: `alice,bob` ≠ `bob,alice`
 
 ---
 
 ## Implementation Plan
 
-### Phase 1: Comparison Endpoint (MVP)
+### Phase 1: Core Comparison Endpoint (3-4 days)
 
-**Goal**: Implement `/api/compare` without requiring storage infrastructure.
+#### Day 1: Foundation & Validation (Full Day)
 
-#### Tasks
+**Tasks**:
+1. Create `/api/compare.js` endpoint file
+2. Implement parameter validation
+   - Username validation (reuse existing regex)
+   - Count validation (2-5 users)
+   - Format validation
+   - Stats filter validation
+3. Integrate access control
+   - Use existing `guardAccess` function
+   - Apply whitelist/blacklist
+4. Add input sanitization
+5. Write unit tests for validation
 
-1. **Create API Endpoint** (1 day)
-   - [ ] Create `api/compare.js`
-   - [ ] Implement request handler
-   - [ ] Add parameter validation
-   - [ ] Integrate with existing access guards
+**Deliverables**:
+- Working endpoint skeleton
+- Parameter validation complete
+- Access control integrated
+- Tests for validation logic
 
-2. **Implement Comparison Logic** (1 day)
-   - [ ] Create `src/comparison/compare.js`
-   - [ ] Implement parallel stats fetching
-   - [ ] Create difference calculator
-   - [ ] Add percentage calculator
-   - [ ] Implement leader determination
+---
 
-3. **Response Formatting** (0.5 days)
-   - [ ] Implement detailed format
-   - [ ] Implement compact format
-   - [ ] Implement leaderboard format
-   - [ ] Add metadata (timestamps, cache flags)
+#### Day 2: Comparison Logic (Full Day)
 
-4. **Caching Strategy** (0.5 days)
-   - [ ] Design cache key structure
-   - [ ] Implement cache lookup
-   - [ ] Implement cache storage
-   - [ ] Set appropriate TTLs
+**Tasks**:
+1. Create `src/comparison/compare.js` module
+2. Implement parallel stats fetching
+   - Use `Promise.all()` for concurrent requests
+   - Handle partial failures gracefully
+   - Timeout handling
+3. Implement difference calculator
+   - Absolute differences
+   - Percentage calculations
+   - Handle zero values
+4. Implement leader determination
+5. Create summary generator
+6. Write unit tests for comparison logic
 
-5. **Testing** (1 day)
-   - [ ] Unit tests for comparison logic
-   - [ ] Integration tests for endpoint
-   - [ ] Error handling tests
-   - [ ] Performance tests
+**Deliverables**:
+- Comparison module complete
+- Parallel fetching working
+- Calculation functions tested
+- Leader detection working
 
-**Total**: ~4 days
+---
 
-### Phase 2: Storage Infrastructure
+#### Day 3: Response Formatting & Caching (Full Day)
 
-**Goal**: Implement snapshot storage for historical tracking.
+**Tasks**:
+1. Implement response formatters
+   - Detailed format
+   - Compact format
+   - Leaderboard format
+2. Add metadata generation
+3. Implement caching
+   - Cache key generation
+   - Cache lookup
+   - Cache storage
+   - TTL handling
+4. Add error handling
+   - Graceful degradation
+   - Partial success handling
+   - Clear error messages
+5. Write integration tests
 
-#### Tasks
+**Deliverables**:
+- All response formats working
+- Caching implemented
+- Error handling complete
+- Integration tests passing
 
-1. **Storage Design** (0.5 days)
-   - [ ] Choose storage solution (Redis/Vercel KV)
-   - [ ] Design schema
-   - [ ] Plan retention policy
-   - [ ] Design index structure
+---
 
-2. **Storage Adapter** (1 day)
-   - [ ] Create `src/storage/adapter.js`
-   - [ ] Implement save snapshot
-   - [ ] Implement retrieve snapshot
-   - [ ] Implement list snapshots
-   - [ ] Implement delete old snapshots
+#### Day 4: Testing, Documentation & Polish (Full Day)
 
-3. **Snapshot Capture System** (1 day)
-   - [ ] Create snapshot scheduler (cron/webhook)
-   - [ ] Implement snapshot capture logic
-   - [ ] Add snapshot validation
-   - [ ] Implement retention cleanup
+**Tasks**:
+1. Comprehensive testing
+   - Edge cases
+   - Error scenarios
+   - Performance testing
+   - Load testing
+2. Documentation
+   - Update README.md
+   - Add API documentation
+   - Code comments
+   - Example usage
+3. Performance optimization
+   - Profile slow paths
+   - Optimize calculations
+   - Reduce memory usage
+4. Final review and polish
 
-4. **Testing** (0.5 days)
-   - [ ] Unit tests for storage adapter
-   - [ ] Integration tests
-   - [ ] Test retention policy
+**Deliverables**:
+- >80% test coverage
+- Complete documentation
+- Performance optimized
+- Ready for deployment
 
-**Total**: ~3 days
+---
 
-### Phase 3: Diff Endpoint
+### File Structure
 
-**Goal**: Implement `/api/diff` with historical comparison.
-
-#### Tasks
-
-1. **Create API Endpoint** (0.5 days)
-   - [ ] Create `api/diff.js`
-   - [ ] Implement request handler
-   - [ ] Add parameter validation
-
-2. **Historical Data Retrieval** (0.5 days)
-   - [ ] Implement snapshot lookup by date
-   - [ ] Add fallback logic for missing snapshots
-   - [ ] Handle edge cases
-
-3. **Diff Calculation** (1 day)
-   - [ ] Create `src/comparison/diff.js`
-   - [ ] Implement change calculator
-   - [ ] Add trend analysis
-   - [ ] Implement milestone detection
-   - [ ] Calculate growth rates
-
-4. **Response Formatting** (0.5 days)
-   - [ ] Implement detailed format
-   - [ ] Implement compact format
-   - [ ] Add trend indicators
-
-5. **Testing** (0.5 days)
-   - [ ] Unit tests for diff logic
-   - [ ] Integration tests
-   - [ ] Edge case tests
-
-**Total**: ~3 days
-
-### Total Estimated Effort: 10 days (including buffer)
+```
+github-readme-stats/
+├── api/
+│   ├── compare.js (NEW - main endpoint)
+│   ├── index.js (existing)
+│   └── ...
+├── src/
+│   ├── comparison/ (NEW directory)
+│   │   ├── compare.js (NEW - comparison logic)
+│   │   ├── formatters.js (NEW - response formatters)
+│   │   ├── calculators.js (NEW - diff calculations)
+│   │   └── types.d.ts (NEW - TypeScript definitions)
+│   ├── fetchers/
+│   │   ├── stats.js (existing - reuse)
+│   │   └── ...
+│   ├── common/
+│   │   └── ... (existing utilities)
+│   └── ...
+├── tests/
+│   ├── api-compare.test.js (NEW)
+│   ├── comparison.test.js (NEW)
+│   └── ...
+└── ...
+```
 
 ---
 
@@ -1175,59 +1018,60 @@ interface SnapshotIndex {
 ### Input Validation
 
 1. **Username Validation**
-   - Use existing `github-username-regex` validator
-   - Prevent injection attacks
-   - Limit username length
+   - Use existing `github-username-regex`
+   - Max length: 39 characters
+   - Alphanumeric and hyphens only
+   - No SQL/command injection possible
 
-2. **Parameter Sanitization**
-   - Sanitize all query parameters
-   - Validate numeric ranges
-   - Whitelist allowed values
+2. **Parameter Limits**
+   - Min users: 2
+   - Max users: 5
+   - Prevent DoS via excessive comparisons
 
-3. **Query Limits**
-   - Max 5 users per comparison
-   - Limit stats list length
-   - Prevent excessively long cache times
+3. **Format Validation**
+   - Whitelist: `detailed`, `compact`, `leaderboard`
+   - Reject invalid formats
+
+4. **Stats Filter Validation**
+   - Whitelist known stats
+   - Reject unknown stats names
+   - Limit filter length
 
 ### Access Control
 
 1. **Whitelist/Blacklist**
    - Apply existing access guards
-   - Respect whitelist when configured
+   - Respect `WHITELIST` environment variable
    - Block blacklisted users
 
 2. **Rate Limiting**
-   - Implement per-IP rate limits
-   - Implement per-user rate limits
-   - Different limits for comparison vs diff
+   ```javascript
+   // Suggested rate limits
+   - Per IP: 30 requests/minute
+   - Per user comparison: 10 requests/minute
+   - Burst: 10 requests
+   ```
+
+3. **Authentication** (Future)
+   - Optional API key for higher limits
+   - OAuth integration for private repos
 
 ### Data Privacy
 
 1. **Public Data Only**
-   - Only use publicly available GitHub data
-   - Same privacy guarantees as existing cards
-   - No private repository data
+   - Only publicly available GitHub data
+   - No private repository information
+   - No email addresses or personal data
 
-2. **Opt-Out Mechanism** (Phase 2)
-   - Allow users to opt-out of historical tracking
-   - Respect GitHub privacy settings
-   - Provide data deletion endpoint
+2. **No Data Storage**
+   - Only cache (ephemeral)
+   - No permanent storage
+   - GDPR compliant by design
 
-### Storage Security (Phase 2)
-
-1. **Data Encryption**
-   - Encrypt snapshots at rest (if using database)
-   - Use secure connections (TLS)
-
-2. **Access Credentials**
-   - Store storage credentials securely
-   - Use environment variables
-   - Rotate credentials regularly
-
-3. **Data Retention**
-   - Implement automatic cleanup
-   - Respect retention policies
-   - Provide manual cleanup options
+3. **No Sensitive Exposure**
+   - Don't expose PAT tokens
+   - Don't leak internal errors
+   - Sanitize error messages
 
 ---
 
@@ -1236,48 +1080,53 @@ interface SnapshotIndex {
 ### Optimization Strategies
 
 1. **Parallel Fetching**
-   - Fetch multiple users' stats in parallel
-   - Use `Promise.all()` for concurrent requests
-   - Implement timeout handling
+   ```javascript
+   // Fetch all users concurrently
+   const results = await Promise.all(
+     usernames.map(username => 
+       fetchStats(username, ...options)
+     )
+   );
+   ```
 
-2. **Caching**
-   - Cache comparison results
-   - Use composite cache keys
-   - Implement smart TTLs based on data freshness
+2. **Smart Caching**
+   - Cache complete comparisons
+   - 1-hour default TTL
+   - Cache hit reduces response time by ~90%
 
-3. **Response Compression**
-   - Compress JSON responses
-   - Use gzip/brotli encoding
+3. **Efficient Calculations**
+   - Minimize iterations
+   - Reuse calculations
+   - Avoid redundant processing
 
-4. **Pagination** (Future)
-   - For multi-user comparisons (>5 users)
-   - For historical snapshot lists
+4. **Response Compression**
+   - Enable gzip/brotli
+   - Reduce payload size
 
 ### Performance Targets
 
 | Metric | Target | Measurement |
 |--------|--------|-------------|
 | Response Time (Cached) | < 200ms | 95th percentile |
-| Response Time (Uncached) | < 3s | 95th percentile |
-| Parallel Fetch Time | < 2s | 2 users |
-| Storage Write | < 100ms | Snapshot save |
-| Storage Read | < 50ms | Snapshot retrieve |
-| Cache Hit Rate | > 70% | Comparison endpoint |
+| Response Time (Uncached, 2 users) | < 3s | 95th percentile |
+| Response Time (Uncached, 5 users) | < 5s | 95th percentile |
+| Cache Hit Rate | > 60% | After warmup |
+| Concurrent Requests | 100+ | Without errors |
+| Memory Usage | < 50MB | Per request |
 
-### Load Testing
+### Bottleneck Analysis
 
-1. **Scenarios**
-   - 100 concurrent requests to `/api/compare`
-   - 1000 requests/minute sustained load
-   - Cache warm vs cold scenarios
-   - PAT rotation under load
+**Potential Bottlenecks**:
+1. GitHub API latency (~500ms-1s per user)
+2. GraphQL query complexity
+3. Multiple sequential API calls
+4. JSON parsing/serialization
 
-2. **Metrics to Monitor**
-   - Response time distribution
-   - Error rate
-   - GitHub API quota consumption
-   - Memory usage
-   - Cache hit/miss ratio
+**Mitigation**:
+1. Parallel fetching (biggest win)
+2. Aggressive caching
+3. Efficient data structures
+4. Stream processing where possible
 
 ---
 
@@ -1285,244 +1134,308 @@ interface SnapshotIndex {
 
 ### Unit Tests
 
-#### Test Coverage Requirements
-- Minimum 80% code coverage
-- 100% coverage for core comparison logic
-- All error paths tested
+**Coverage Target**: > 80%
 
-#### Key Test Cases
+#### Test Files to Create
 
-1. **Comparison Logic**
+1. **tests/comparison.test.js**
    ```javascript
-   // tests/comparison.test.js
-   - calculateDifference() with positive values
-   - calculateDifference() with negative values
-   - calculatePercentage() with zero values
-   - determineLeader() with ties
-   - formatComparisonResult() for all formats
+   describe("Comparison Logic", () => {
+     describe("calculateDifference", () => {
+       it("should calculate positive difference");
+       it("should calculate negative difference");
+       it("should handle zero values");
+       it("should handle equal values");
+     });
+
+     describe("calculatePercentage", () => {
+       it("should calculate percentage correctly");
+       it("should handle division by zero");
+       it("should round to 2 decimal places");
+     });
+
+     describe("determineLeader", () => {
+       it("should identify leader correctly");
+       it("should handle ties");
+       it("should work with multiple users");
+     });
+
+     describe("generateSummary", () => {
+       it("should identify overall leader");
+       it("should count stats won per user");
+       it("should identify close stats (<5%)");
+       it("should identify significant differences (>50%)");
+     });
+   });
    ```
 
-2. **Diff Logic**
+2. **tests/api-compare.test.js**
    ```javascript
-   // tests/diff.test.js
-   - calculateChange() with growth
-   - calculateChange() with decline
-   - detectTrend() for various patterns
-   - detectMilestones() threshold crossing
-   - calculateGrowthRate() for different rates
-   ```
+   describe("/api/compare", () => {
+     describe("Parameter Validation", () => {
+       it("should reject missing user1");
+       it("should reject missing user2");
+       it("should reject more than 5 users");
+       it("should reject invalid usernames");
+       it("should reject invalid format");
+     });
 
-3. **Storage Adapter** (Phase 2)
-   ```javascript
-   // tests/storage.test.js
-   - saveSnapshot() success case
-   - retrieveSnapshot() with valid ID
-   - retrieveSnapshot() with missing snapshot
-   - listSnapshots() with pagination
-   - deleteOldSnapshots() retention policy
+     describe("Access Control", () => {
+       it("should respect whitelist");
+       it("should block blacklisted users");
+       it("should allow valid users");
+     });
+
+     describe("Comparison", () => {
+       it("should compare 2 users successfully");
+       it("should compare 5 users successfully");
+       it("should return detailed format by default");
+       it("should return compact format when requested");
+       it("should return leaderboard format when requested");
+     });
+
+     describe("Error Handling", () => {
+       it("should handle user not found");
+       it("should handle partial failures");
+       it("should handle GitHub API errors");
+       it("should handle rate limiting");
+     });
+
+     describe("Caching", () => {
+       it("should cache successful comparisons");
+       it("should return cached results");
+       it("should respect cache_seconds parameter");
+       it("should differentiate cache by user order");
+     });
+   });
    ```
 
 ### Integration Tests
 
-#### Test Scenarios
+```javascript
+describe("E2E Comparison Tests", () => {
+  it("should compare real GitHub users", async () => {
+    // Use public test accounts
+    const response = await fetch(
+      "/api/compare?user1=torvalds&user2=gvanrossum"
+    );
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.comparison.users).toHaveLength(2);
+  });
 
-1. **Endpoint Tests**
-   ```javascript
-   // tests/api-compare.test.js
-   describe("/api/compare", () => {
-     it("should compare two valid users");
-     it("should handle invalid usernames");
-     it("should respect rate limits");
-     it("should return cached results");
-     it("should handle GitHub API errors");
-     it("should support multiple formats");
-   });
-   ```
-
-2. **End-to-End Tests**
-   ```javascript
-   // tests/e2e/comparison.e2e.test.js
-   - Full flow: request → fetch → compare → cache → response
-   - Parallel user fetching
-   - PAT rotation during comparison
-   - Cache invalidation
-   ```
+  it("should handle mixed valid/invalid users", async () => {
+    const response = await fetch(
+      "/api/compare?user1=torvalds&user2=invaliduser123456789"
+    );
+    expect(response.status).toBe(206); // Partial Content
+  });
+});
+```
 
 ### Performance Tests
 
 ```javascript
-// tests/performance/compare.bench.js
-describe("Performance benchmarks", () => {
-  it("should complete comparison in < 3s");
-  it("should handle 100 concurrent requests");
-  it("should maintain < 5% error rate under load");
+describe("Performance Tests", () => {
+  it("should complete comparison in < 3s", async () => {
+    const start = Date.now();
+    await fetch("/api/compare?user1=alice&user2=bob");
+    const duration = Date.now() - start;
+    expect(duration).toBeLessThan(3000);
+  });
+
+  it("should handle 50 concurrent requests", async () => {
+    const requests = Array(50).fill(null).map(() =>
+      fetch("/api/compare?user1=alice&user2=bob")
+    );
+    const responses = await Promise.all(requests);
+    const successCount = responses.filter(r => r.status === 200).length;
+    expect(successCount).toBeGreaterThan(45); // 90% success rate
+  });
 });
 ```
 
-### Test Data
+### Manual Testing Checklist
 
-1. **Mock Users**
-   - Create test fixtures with known stats
-   - Include edge cases (zero values, very large values)
-   - Test with real GitHub users (public data)
-
-2. **Mock Responses**
-   - GitHub API responses
-   - Error responses (404, 403, 500)
-   - Rate limit responses
+- [ ] Compare 2 users with detailed format
+- [ ] Compare 2 users with compact format
+- [ ] Compare 2 users with leaderboard format
+- [ ] Compare 5 users successfully
+- [ ] Test with invalid username
+- [ ] Test with non-existent user
+- [ ] Test with blacklisted user
+- [ ] Test stats filter parameter
+- [ ] Test exclude_repo parameter
+- [ ] Test cache_seconds parameter
+- [ ] Verify caching works
+- [ ] Test rate limiting (if implemented)
+- [ ] Test with different stat combinations
+- [ ] Test error messages are clear
+- [ ] Verify response times
 
 ---
 
 ## Success Criteria
 
-### Phase 1 Success Criteria
+### Functional Success
 
-The `/api/compare` endpoint is considered successful when:
+The `/api/compare` endpoint is considered functionally successful when:
 
-1. **Functional**
-   - ✅ Compares 2-5 users correctly
-   - ✅ Returns accurate difference calculations
-   - ✅ Supports all three output formats
-   - ✅ Handles errors gracefully
-   - ✅ Respects access controls
+- ✅ Accepts 2-5 valid GitHub usernames
+- ✅ Returns accurate comparison data
+- ✅ Supports all three output formats (detailed, compact, leaderboard)
+- ✅ Calculates differences and percentages correctly
+- ✅ Identifies leaders for each metric
+- ✅ Handles errors gracefully
+- ✅ Respects access controls (whitelist/blacklist)
+- ✅ Returns appropriate HTTP status codes
+- ✅ Provides clear error messages
 
-2. **Performance**
-   - ✅ 95th percentile response time < 3s (uncached)
-   - ✅ 95th percentile response time < 200ms (cached)
-   - ✅ Cache hit rate > 70% after warmup
-   - ✅ No increase in GitHub API quota exhaustion
+### Performance Success
 
-3. **Quality**
-   - ✅ Test coverage > 80%
-   - ✅ No critical bugs in production
-   - ✅ Passes all linting/formatting checks
-   - ✅ Documentation complete
+- ✅ 95th percentile response time < 3s (uncached, 2 users)
+- ✅ 95th percentile response time < 5s (uncached, 5 users)
+- ✅ 95th percentile response time < 200ms (cached)
+- ✅ Cache hit rate > 60% after warmup
+- ✅ Handles 50+ concurrent requests without errors
+- ✅ No increase in GitHub API quota exhaustion
 
-4. **Adoption**
-   - ✅ Successfully processes 100+ requests/day
-   - ✅ Error rate < 1%
-   - ✅ Positive user feedback
+### Quality Success
 
-### Phase 2 Success Criteria
+- ✅ Test coverage > 80%
+- ✅ All tests passing
+- ✅ No critical bugs
+- ✅ Passes all linting/formatting checks
+- ✅ JSDoc comments complete
+- ✅ Code follows existing conventions
 
-The storage infrastructure is considered successful when:
+### Documentation Success
 
-1. **Functional**
-   - ✅ Snapshots saved reliably
-   - ✅ Snapshots retrieved accurately
-   - ✅ Retention policy works correctly
-   - ✅ No data loss
+- ✅ API documentation complete
+- ✅ README updated with examples
+- ✅ Query parameters documented
+- ✅ Response formats documented
+- ✅ Error codes documented
+- ✅ Example usage provided
 
-2. **Performance**
-   - ✅ Snapshot write < 100ms
-   - ✅ Snapshot read < 50ms
-   - ✅ Storage costs within budget
+### Adoption Success (Post-Launch)
 
-3. **Reliability**
-   - ✅ 99.9% snapshot save success rate
-   - ✅ Automatic cleanup functioning
-   - ✅ No storage exhaustion issues
-
-### Phase 3 Success Criteria
-
-The `/api/diff` endpoint is considered successful when:
-
-1. **Functional**
-   - ✅ Accurately calculates changes
-   - ✅ Detects trends correctly
-   - ✅ Identifies milestones
-   - ✅ Handles missing historical data gracefully
-
-2. **Performance**
-   - ✅ 95th percentile response time < 1s
-   - ✅ Efficient historical data queries
-
-3. **Adoption**
-   - ✅ Successfully processes 50+ requests/day
-   - ✅ Users track progress regularly
-   - ✅ Positive feedback on insights
+- ✅ Processes 100+ requests/day within first week
+- ✅ Error rate < 2%
+- ✅ No critical production bugs
+- ✅ Positive user feedback
+- ✅ Used by at least 10 different projects
 
 ---
 
 ## Future Enhancements
 
-### Short-term Enhancements
+### Short-term (Can be added later)
 
-1. **Webhook Integration**
-   - Notify users of significant changes
+1. **Historical Tracking** (Original Phase 2/3)
+   - Add `/api/diff` endpoint
+   - Implement snapshot storage
+   - Enable progress tracking over time
+   - Requires storage infrastructure
+
+2. **More Output Formats**
+   - CSV format for spreadsheets
+   - XML format
+   - YAML format
+   - Markdown table format
+
+3. **Advanced Filtering**
+   - Compare specific time periods
+   - Filter by contribution type
+   - Repository category filtering
+
+4. **Visualization Endpoints**
+   - Generate comparison charts (SVG)
+   - Bar charts for side-by-side comparison
+   - Radar charts for multi-metric view
+
+### Medium-term
+
+1. **Batch Comparison**
+   - Compare more than 5 users (paginated)
+   - Team/organization aggregation
+   - Department-level comparisons
+
+2. **Custom Scoring**
+   - User-defined weight for metrics
+   - Custom ranking algorithms
+   - Achievement badges
+
+3. **Webhook Integration**
+   - Notify on rank changes (requires historical data)
    - Integration with Discord/Slack
-   - Automated progress reports
+   - Automated reporting
 
-2. **Visualization Endpoints**
-   - Generate simple charts/graphs
-   - SVG trend visualizations
-   - Progress bars for growth
+4. **API Authentication**
+   - API keys for higher rate limits
+   - OAuth integration
+   - Private repository access
 
-3. **Custom Thresholds**
-   - User-defined milestone values
-   - Custom comparison weights
-   - Personalized growth targets
+### Long-term
 
-### Medium-term Enhancements
-
-1. **Multi-period Comparison**
-   - Compare multiple time periods at once
-   - Quarter-over-quarter analysis
-   - Year-over-year comparison
-
-2. **Team Aggregation**
-   - Aggregate stats for organizations
-   - Team-level comparisons
-   - Department analytics
-
-3. **Export Formats**
-   - CSV export
-   - PDF reports
-   - Excel-compatible formats
-
-### Long-term Enhancements
-
-1. **Machine Learning Insights**
+1. **Machine Learning**
    - Predict future stats
    - Anomaly detection
    - Contribution pattern analysis
 
-2. **Leaderboard Service**
-   - Public/private leaderboards
-   - Community competitions
-   - Achievement badges
-
-3. **GraphQL API**
+2. **GraphQL API**
    - More flexible queries
+   - Better performance for complex requests
    - Subscription support
-   - Better performance for complex queries
+
+3. **Real-time Updates**
+   - WebSocket support
+   - Live leaderboards
+   - Push notifications
+
+4. **Advanced Analytics**
+   - Team velocity tracking
+   - Contribution heatmaps
+   - Language evolution over time
 
 ---
 
 ## Appendix
 
-### Related Issues
-- Issue tracking comparison feature requests
-- Historical tracking discussions
-- Privacy concerns
+### Related Documents
+
+- [Non-UI Feature Proposals](./NON_UI_FEATURE_PROPOSALS.md) - Original comprehensive feature list
+- [README.md](./readme.md) - Main project documentation
+- API Endpoints - Existing endpoint documentation
+
+### Glossary
+
+- **Comparison**: Side-by-side analysis of multiple users' stats
+- **Leader**: User with highest value for a given metric
+- **Diff/Difference**: Absolute or percentage gap between values
+- **Leaderboard**: Ranked list of users by overall score
+- **Parallel Fetching**: Concurrent API requests for better performance
 
 ### References
-- GitHub API documentation
-- Vercel serverless best practices
-- Redis/storage documentation
 
-### Contributors
-- Feature specification author
-- Technical reviewers
-- Community feedback
+- [GitHub GraphQL API](https://docs.github.com/en/graphql)
+- [Vercel Serverless Functions](https://vercel.com/docs/functions)
+- [GitHub Username Validation](https://github.com/shinnn/github-username-regex)
 
 ### Changelog
-- 2024-01-15: Initial specification created
-- Future: Updates based on implementation feedback
+
+- **2024-01-15**: Initial specification created
+- **2024-01-XX**: Scope reduced - eliminated historical tracking
+  - Removed `/api/diff` endpoint
+  - Removed storage infrastructure requirements
+  - Reduced complexity from MEDIUM-HIGH to MEDIUM
+  - Reduced effort from 5-7 days to 3-4 days
+  - Focused solely on real-time comparison
 
 ---
 
-**Document Status**: DRAFT  
+**Document Status**: DRAFT (Scope Reduced)  
 **Review Status**: Pending  
-**Approval Status**: Pending
+**Approval Status**: Pending  
+**Next Steps**: Review and approval, then begin implementation
 
