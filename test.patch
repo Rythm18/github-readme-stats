@@ -1,0 +1,738 @@
+diff --git a/test.sh b/test.sh
+new file mode 100755
+index 0000000..6c88082
+--- /dev/null
++++ b/test.sh
+@@ -0,0 +1,17 @@
++#!/bin/bash
++set -e
++
++case "$1" in
++  base)
++    # Run existing tests - should pass at base commit
++    npm test -- tests/api.test.js
++    ;;
++  new)
++    # Run newly added tests - should fail before solution
++    npm test -- tests/api-compare.test.js
++    ;;
++  *)
++    echo "Usage: ./test.sh {base|new}"
++    exit 1
++    ;;
++esac
+diff --git a/tests/api-compare.test.js b/tests/api-compare.test.js
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/api-compare.test.js
+@@ -0,0 +1,709 @@
++// @ts-check
++
++if (!process.env.PAT_1) {
++  process.env.PAT_1 = "test_pat_token";
++}
++
++import {
++  describe,
++  expect,
++  it,
++  jest,
++  beforeEach,
++  afterEach,
++} from "@jest/globals";
++import axios from "axios";
++import MockAdapter from "axios-mock-adapter";
++import compareHandler from "../api/compare.js";
++
++const mock = new MockAdapter(axios);
++
++/**
++ * Create mock GraphQL response for stats.
++ *
++ * @param {string} username Username.
++ * @param {Object} overrides Stats overrides.
++ * @returns {Object} Mock GraphQL response.
++ */
++const createMockStatsResponse = (
++  username,
++  { stars = 100, commits = 200, prs = 50, issues = 30, reviews = 20 } = {},
++) => ({
++  data: {
++    user: {
++      name: username,
++      login: username,
++      repositoriesContributedTo: { totalCount: 10 },
++      commits: { totalCommitContributions: commits },
++      reviews: { totalPullRequestReviewContributions: reviews },
++      pullRequests: { totalCount: prs },
++      mergedPullRequests: { totalCount: prs - 5 },
++      openIssues: { totalCount: Math.floor(issues / 2) },
++      closedIssues: { totalCount: Math.ceil(issues / 2) },
++      followers: { totalCount: 50 },
++      repositoryDiscussions: { totalCount: 5 },
++      repositoryDiscussionComments: { totalCount: 10 },
++      repositories: {
++        totalCount: 10,
++        nodes: [{ name: "repo1", stargazers: { totalCount: stars } }],
++        pageInfo: { hasNextPage: false, endCursor: null },
++      },
++    },
++  },
++});
++
++beforeEach(() => {
++  mock.reset();
++});
++
++afterEach(() => {
++  mock.reset();
++});
++
++describe("GET /api/compare", () => {
++  describe("Parameter Validation", () => {
++    it("should return 400 if no user parameters provided", async () => {
++      const req = { query: {} };
++      const res = {
++        status: jest.fn().mockReturnThis(),
++        json: jest.fn(),
++        setHeader: jest.fn(),
++      };
++
++      await compareHandler(req, res);
++
++      expect(res.status).toHaveBeenCalledWith(400);
++      expect(res.json).toHaveBeenCalledWith(
++        expect.objectContaining({
++          code: "MISSING_PARAMS",
++          message: expect.stringContaining("user1, user2"),
++        }),
++      );
++    });
++
++    it("should return 400 if only one user provided", async () => {
++      const req = { query: { user1: "alice" } };
++      const res = {
++        status: jest.fn().mockReturnThis(),
++        json: jest.fn(),
++        setHeader: jest.fn(),
++      };
++
++      await compareHandler(req, res);
++
++      expect(res.status).toHaveBeenCalledWith(400);
++      expect(res.json).toHaveBeenCalledWith(
++        expect.objectContaining({
++          code: "MISSING_PARAMS",
++          message: expect.stringContaining("at least 2 users"),
++        }),
++      );
++    });
++
++    it("should accept 2 users", async () => {
++      mock
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(200, createMockStatsResponse("alice"))
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(200, createMockStatsResponse("bob"));
++
++      const req = { query: { user1: "alice", user2: "bob" } };
++      const res = {
++        status: jest.fn().mockReturnThis(),
++        json: jest.fn(),
++        setHeader: jest.fn(),
++      };
++
++      await compareHandler(req, res);
++
++      expect(res.status).toHaveBeenCalledWith(200);
++    });
++
++    it("should accept up to 5 users", async () => {
++      mock.onPost("https://api.github.com/graphql").reply((config) => {
++        const body = JSON.parse(config.data);
++        const username = body.variables.login;
++        return [200, createMockStatsResponse(username)];
++      });
++
++      const req = {
++        query: {
++          user1: "alice",
++          user2: "bob",
++          user3: "charlie",
++          user4: "dave",
++          user5: "eve",
++        },
++      };
++      const res = {
++        status: jest.fn().mockReturnThis(),
++        json: jest.fn(),
++        setHeader: jest.fn(),
++      };
++
++      await compareHandler(req, res);
++
++      expect(res.status).toHaveBeenCalledWith(200);
++      const response = res.json.mock.calls[0][0];
++      expect(response.comparison.users).toHaveLength(5);
++    });
++
++    it("should return 400 for invalid format", async () => {
++      const req = {
++        query: { user1: "alice", user2: "bob", format: "markdown" },
++      };
++      const res = {
++        status: jest.fn().mockReturnThis(),
++        json: jest.fn(),
++        setHeader: jest.fn(),
++      };
++
++      await compareHandler(req, res);
++
++      expect(res.status).toHaveBeenCalledWith(400);
++      expect(res.json).toHaveBeenCalledWith(
++        expect.objectContaining({
++          code: "INVALID_FORMAT",
++          message: expect.stringContaining("Invalid format"),
++        }),
++      );
++    });
++
++    it("should return 400 for invalid stats", async () => {
++      const req = {
++        query: { user1: "alice", user2: "bob", stats: "commits,invalid_stat" },
++      };
++      const res = {
++        status: jest.fn().mockReturnThis(),
++        json: jest.fn(),
++        setHeader: jest.fn(),
++      };
++
++      await compareHandler(req, res);
++
++      expect(res.status).toHaveBeenCalledWith(400);
++      expect(res.json).toHaveBeenCalledWith(
++        expect.objectContaining({
++          code: "INVALID_STATS",
++          message: expect.stringContaining("Invalid stats"),
++        }),
++      );
++    });
++  });
++
++  describe("Response Format: Detailed", () => {
++    it("should return detailed format by default", async () => {
++      mock
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(200, createMockStatsResponse("alice", { stars: 100 }))
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(200, createMockStatsResponse("bob", { stars: 150 }));
++
++      const req = { query: { user1: "alice", user2: "bob" } };
++      const res = {
++        status: jest.fn().mockReturnThis(),
++        json: jest.fn(),
++        setHeader: jest.fn(),
++      };
++
++      await compareHandler(req, res);
++
++      expect(res.status).toHaveBeenCalledWith(200);
++      const response = res.json.mock.calls[0][0];
++
++      // Verify detailed format structure
++      expect(response).toHaveProperty("comparison");
++      expect(response.comparison).toHaveProperty("users");
++      expect(response.comparison).toHaveProperty("timestamp");
++      expect(response.comparison).toHaveProperty("cached");
++
++      expect(response).toHaveProperty("data");
++      expect(response.data).toHaveProperty("alice");
++      expect(response.data).toHaveProperty("bob");
++
++      expect(response).toHaveProperty("diff");
++      expect(response).toHaveProperty("summary");
++      expect(response.summary).toHaveProperty("overall_leader");
++      expect(response.summary).toHaveProperty("stats_won");
++    });
++
++    it("should include all user data in detailed format", async () => {
++      mock
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(200, createMockStatsResponse("alice"))
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(200, createMockStatsResponse("bob"));
++
++      const req = { query: { user1: "alice", user2: "bob" } };
++      const res = {
++        status: jest.fn().mockReturnThis(),
++        json: jest.fn(),
++        setHeader: jest.fn(),
++      };
++
++      await compareHandler(req, res);
++
++      const response = res.json.mock.calls[0][0];
++
++      expect(response.data.alice).toHaveProperty("totalCommits");
++      expect(response.data.alice).toHaveProperty("totalPRs");
++      expect(response.data.alice).toHaveProperty("totalStars");
++      expect(response.data.alice).toHaveProperty("totalIssues");
++      expect(response.data.alice).toHaveProperty("rank");
++    });
++
++    it("should calculate differences with percentage and leader", async () => {
++      mock
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(
++          200,
++          createMockStatsResponse("alice", { stars: 100, commits: 200 }),
++        )
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(
++          200,
++          createMockStatsResponse("bob", { stars: 150, commits: 180 }),
++        );
++
++      const req = { query: { user1: "alice", user2: "bob" } };
++      const res = {
++        status: jest.fn().mockReturnThis(),
++        json: jest.fn(),
++        setHeader: jest.fn(),
++      };
++
++      await compareHandler(req, res);
++
++      const response = res.json.mock.calls[0][0];
++
++      // Verify totalStars diff
++      expect(response.diff.totalStars).toHaveProperty("alice");
++      expect(response.diff.totalStars).toHaveProperty("bob");
++      expect(response.diff.totalStars).toHaveProperty("leader");
++      expect(response.diff.totalStars).toHaveProperty("percentage");
++      expect(response.diff.totalStars).toHaveProperty("difference");
++
++      // Bob should be leader in stars (150 > 100)
++      expect(response.diff.totalStars.leader).toBe("bob");
++
++      // Alice should be leader in commits (200 > 180)
++      expect(response.diff.totalCommits.leader).toBe("alice");
++    });
++  });
++
++  describe("Response Format: Compact", () => {
++    it("should return compact format when requested", async () => {
++      mock
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(200, createMockStatsResponse("alice"))
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(200, createMockStatsResponse("bob"));
++
++      const req = {
++        query: { user1: "alice", user2: "bob", format: "compact" },
++      };
++      const res = {
++        status: jest.fn().mockReturnThis(),
++        json: jest.fn(),
++        setHeader: jest.fn(),
++      };
++
++      await compareHandler(req, res);
++
++      expect(res.status).toHaveBeenCalledWith(200);
++      const response = res.json.mock.calls[0][0];
++
++      // Verify compact format structure
++      expect(response).toHaveProperty("users");
++      expect(response).toHaveProperty("timestamp");
++      expect(response).toHaveProperty("diff");
++      expect(response).toHaveProperty("leader");
++
++      // Should not have full comparison/data/summary structure
++      expect(response).not.toHaveProperty("comparison");
++      expect(response).not.toHaveProperty("data");
++      expect(response).not.toHaveProperty("summary");
++
++      // Diff should have delta instead of full details
++      expect(response.diff.totalStars).toHaveProperty("delta");
++      expect(response.diff.totalStars).toHaveProperty("leader");
++    });
++  });
++
++  describe("Response Format: Leaderboard", () => {
++    it("should return leaderboard format when requested", async () => {
++      mock.onPost("https://api.github.com/graphql").reply((config) => {
++        const body = JSON.parse(config.data);
++        const username = body.variables.login;
++        const stats = {
++          alice: { stars: 100, commits: 200, prs: 50 },
++          bob: { stars: 200, commits: 150, prs: 60 },
++          charlie: { stars: 150, commits: 180, prs: 55 },
++        };
++        return [200, createMockStatsResponse(username, stats[username] || {})];
++      });
++
++      const req = {
++        query: {
++          user1: "alice",
++          user2: "bob",
++          user3: "charlie",
++          format: "leaderboard",
++        },
++      };
++      const res = {
++        status: jest.fn().mockReturnThis(),
++        json: jest.fn(),
++        setHeader: jest.fn(),
++      };
++
++      await compareHandler(req, res);
++
++      expect(res.status).toHaveBeenCalledWith(200);
++      const response = res.json.mock.calls[0][0];
++
++      // Verify leaderboard format structure
++      expect(response).toHaveProperty("leaderboard");
++      expect(response).toHaveProperty("timestamp");
++      expect(response.leaderboard).toBeInstanceOf(Array);
++      expect(response.leaderboard).toHaveLength(3);
++
++      // Each entry should have rank, username, totalScore, stats
++      response.leaderboard.forEach((entry) => {
++        expect(entry).toHaveProperty("rank");
++        expect(entry).toHaveProperty("username");
++        expect(entry).toHaveProperty("totalScore");
++        expect(entry).toHaveProperty("stats");
++        expect(entry.stats).toHaveProperty("totalCommits");
++        expect(entry.stats).toHaveProperty("totalPRs");
++        expect(entry.stats).toHaveProperty("rank");
++      });
++
++      // Should be sorted by rank
++      expect(response.leaderboard[0].rank).toBe(1);
++      expect(response.leaderboard[1].rank).toBe(2);
++      expect(response.leaderboard[2].rank).toBe(3);
++    });
++  });
++
++  describe("Stats Filtering", () => {
++    it("should filter stats when stats parameter is provided", async () => {
++      mock
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(200, createMockStatsResponse("alice"))
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(200, createMockStatsResponse("bob"));
++
++      const req = {
++        query: { user1: "alice", user2: "bob", stats: "commits,stars" },
++      };
++      const res = {
++        status: jest.fn().mockReturnThis(),
++        json: jest.fn(),
++        setHeader: jest.fn(),
++      };
++
++      await compareHandler(req, res);
++
++      expect(res.status).toHaveBeenCalledWith(200);
++      const response = res.json.mock.calls[0][0];
++
++      // Should only have the requested stats in diff
++      expect(response.diff).toHaveProperty("totalCommits");
++      expect(response.diff).toHaveProperty("totalStars");
++
++      // Should not have other stats like totalPRs or totalIssues
++      expect(response.diff).not.toHaveProperty("totalPRs");
++      expect(response.diff).not.toHaveProperty("totalIssues");
++    });
++  });
++
++  describe("Parameter Handling", () => {
++    it("should respect include_all_commits parameter", async () => {
++      mock
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(200, createMockStatsResponse("alice"))
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(200, createMockStatsResponse("bob"))
++        // Mock REST API for all commits
++        .onGet(/api.github.com\/search\/commits/)
++        .reply(200, {
++          total_count: 500,
++        });
++
++      const req = {
++        query: {
++          user1: "alice",
++          user2: "bob",
++          include_all_commits: "true",
++        },
++      };
++      const res = {
++        status: jest.fn().mockReturnThis(),
++        json: jest.fn(),
++        setHeader: jest.fn(),
++      };
++
++      await compareHandler(req, res);
++
++      expect(res.status).toHaveBeenCalledWith(200);
++    });
++
++    it("should respect exclude_repo parameter", async () => {
++      mock
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(200, createMockStatsResponse("alice"))
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(200, createMockStatsResponse("bob"));
++
++      const req = {
++        query: {
++          user1: "alice",
++          user2: "bob",
++          exclude_repo: "repo1,repo2",
++        },
++      };
++      const res = {
++        status: jest.fn().mockReturnThis(),
++        json: jest.fn(),
++        setHeader: jest.fn(),
++      };
++
++      await compareHandler(req, res);
++
++      expect(res.status).toHaveBeenCalledWith(200);
++    });
++
++    it("should set cache headers with default TTL", async () => {
++      mock
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(200, createMockStatsResponse("alice"))
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(200, createMockStatsResponse("bob"));
++
++      const req = { query: { user1: "alice", user2: "bob" } };
++      const res = {
++        status: jest.fn().mockReturnThis(),
++        json: jest.fn(),
++        setHeader: jest.fn(),
++      };
++
++      await compareHandler(req, res);
++
++      expect(res.setHeader).toHaveBeenCalledWith(
++        "Cache-Control",
++        expect.stringContaining("max-age"),
++      );
++    });
++
++    it("should set cache headers with custom cache_seconds", async () => {
++      mock
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(200, createMockStatsResponse("alice"))
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(200, createMockStatsResponse("bob"));
++
++      const req = {
++        query: { user1: "alice", user2: "bob", cache_seconds: "7200" },
++      };
++      const res = {
++        status: jest.fn().mockReturnThis(),
++        json: jest.fn(),
++        setHeader: jest.fn(),
++      };
++
++      await compareHandler(req, res);
++
++      expect(res.setHeader).toHaveBeenCalledWith(
++        "Cache-Control",
++        expect.stringContaining("7200"),
++      );
++    });
++  });
++
++  describe("Error Handling", () => {
++    it("should return 404 when user not found", async () => {
++      mock.onPost("https://api.github.com/graphql").reply(200, {
++        errors: [
++          {
++            type: "NOT_FOUND",
++            message: "User not found",
++          },
++        ],
++      });
++
++      const req = { query: { user1: "nonexistent", user2: "bob" } };
++      const res = {
++        status: jest.fn().mockReturnThis(),
++        json: jest.fn(),
++        setHeader: jest.fn(),
++      };
++
++      await compareHandler(req, res);
++
++      expect(res.status).toHaveBeenCalledWith(404);
++      expect(res.json).toHaveBeenCalledWith(
++        expect.objectContaining({
++          code: "USER_NOT_FOUND",
++        }),
++      );
++    });
++
++    it("should return 500 on GraphQL errors", async () => {
++      mock.onPost("https://api.github.com/graphql").reply(200, {
++        errors: [
++          {
++            message: "GraphQL error",
++          },
++        ],
++      });
++
++      const req = { query: { user1: "alice", user2: "bob" } };
++      const res = {
++        status: jest.fn().mockReturnThis(),
++        json: jest.fn(),
++        setHeader: jest.fn(),
++      };
++
++      await compareHandler(req, res);
++
++      expect(res.status).toHaveBeenCalledWith(500);
++      expect(res.json).toHaveBeenCalledWith(
++        expect.objectContaining({
++          error: "Internal Server Error",
++        }),
++      );
++    });
++
++    it("should return 500 on network errors", async () => {
++      mock.onPost("https://api.github.com/graphql").networkError();
++
++      const req = { query: { user1: "alice", user2: "bob" } };
++      const res = {
++        status: jest.fn().mockReturnThis(),
++        json: jest.fn(),
++        setHeader: jest.fn(),
++      };
++
++      await compareHandler(req, res);
++
++      expect(res.status).toHaveBeenCalledWith(500);
++      expect(res.json).toHaveBeenCalledWith(
++        expect.objectContaining({
++          code: "INTERNAL_ERROR",
++        }),
++      );
++    });
++  });
++
++  describe("Summary Calculation", () => {
++    it("should identify overall leader", async () => {
++      mock
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(
++          200,
++          createMockStatsResponse("alice", {
++            stars: 50,
++            commits: 100,
++            prs: 30,
++          }),
++        )
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(
++          200,
++          createMockStatsResponse("bob", {
++            stars: 200,
++            commits: 250,
++            prs: 80,
++          }),
++        );
++
++      const req = { query: { user1: "alice", user2: "bob" } };
++      const res = {
++        status: jest.fn().mockReturnThis(),
++        json: jest.fn(),
++        setHeader: jest.fn(),
++      };
++
++      await compareHandler(req, res);
++
++      const response = res.json.mock.calls[0][0];
++
++      expect(response.summary.overall_leader).toBeDefined();
++      expect(typeof response.summary.overall_leader).toBe("string");
++    });
++
++    it("should count stats won per user", async () => {
++      mock
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(200, createMockStatsResponse("alice"))
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(200, createMockStatsResponse("bob"));
++
++      const req = { query: { user1: "alice", user2: "bob" } };
++      const res = {
++        status: jest.fn().mockReturnThis(),
++        json: jest.fn(),
++        setHeader: jest.fn(),
++      };
++
++      await compareHandler(req, res);
++
++      const response = res.json.mock.calls[0][0];
++
++      expect(response.summary.stats_won).toBeDefined();
++      expect(typeof response.summary.stats_won).toBe("object");
++
++      // Should have counts for both users
++      const statsWon = response.summary.stats_won;
++      const usernames = Object.keys(statsWon);
++      expect(usernames.length).toBeGreaterThan(0);
++    });
++
++    it("should identify close stats", async () => {
++      mock
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(200, createMockStatsResponse("alice", { commits: 100 }))
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(200, createMockStatsResponse("bob", { commits: 105 }));
++
++      const req = { query: { user1: "alice", user2: "bob" } };
++      const res = {
++        status: jest.fn().mockReturnThis(),
++        json: jest.fn(),
++        setHeader: jest.fn(),
++      };
++
++      await compareHandler(req, res);
++
++      const response = res.json.mock.calls[0][0];
++
++      expect(response.summary.close_stats).toBeDefined();
++      expect(Array.isArray(response.summary.close_stats)).toBe(true);
++    });
++
++    it("should identify significant differences", async () => {
++      mock
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(200, createMockStatsResponse("alice", { stars: 50 }))
++        .onPost("https://api.github.com/graphql")
++        .replyOnce(200, createMockStatsResponse("bob", { stars: 200 }));
++
++      const req = { query: { user1: "alice", user2: "bob" } };
++      const res = {
++        status: jest.fn().mockReturnThis(),
++        json: jest.fn(),
++        setHeader: jest.fn(),
++      };
++
++      await compareHandler(req, res);
++
++      const response = res.json.mock.calls[0][0];
++
++      expect(response.summary.significant_differences).toBeDefined();
++      expect(Array.isArray(response.summary.significant_differences)).toBe(
++        true,
++      );
++    });
++  });
++});
