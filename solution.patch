@@ -1,0 +1,919 @@
+diff --git a/api/compare.js b/api/compare.js
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/api/compare.js
+@@ -0,0 +1,280 @@
++// @ts-check
++
++import {
++  compareUsers,
++  formatCompact,
++  formatLeaderboard,
++} from "../src/comparison/compare.js";
++import {
++  CACHE_TTL,
++  resolveCacheSeconds,
++  setCacheHeaders,
++} from "../src/common/cache.js";
++import { CustomError } from "../src/common/error.js";
++import { parseArray, parseBoolean } from "../src/common/ops.js";
++import { whitelist } from "../src/common/envs.js";
++import { blacklist } from "../src/common/blacklist.js";
++import { fetchStats } from "../src/fetchers/stats.js";
++
++/**
++ * Validate and extract user parameters from query.
++ *
++ * @param {Object} query Request query object.
++ * @returns {{usernames: Array<string>, error?: string}} Validation result.
++ */
++const extractUsernames = (query) => {
++  const usernames = [];
++
++  // Extract user1 through user5
++  for (let i = 1; i <= 5; i++) {
++    const userParam = `user${i}`;
++    if (query[userParam]) {
++      usernames.push(query[userParam].trim());
++    }
++  }
++
++  if (usernames.length === 0) {
++    return {
++      usernames: [],
++      error: "Missing required parameters: user1, user2",
++    };
++  }
++
++  if (usernames.length === 1) {
++    return {
++      usernames: [],
++      error: "Please provide at least 2 users (user1 and user2)",
++    };
++  }
++
++  return { usernames };
++};
++
++/**
++ * Validate stats parameter.
++ *
++ * @param {string|undefined} statsParam Stats query parameter.
++ * @returns {{stats: Array<string>, error?: string}} Validation result.
++ */
++const validateStats = (statsParam) => {
++  if (!statsParam) {
++    return { stats: [] }; // Empty means all stats
++  }
++
++  const validStats = [
++    "commits",
++    "prs",
++    "issues",
++    "stars",
++    "reviews",
++    "discussions_started",
++    "discussions_answered",
++    "contributed_to",
++    "rank",
++  ];
++
++  const requestedStats = statsParam.split(",").map((s) => s.trim());
++  const invalidStats = requestedStats.filter((s) => !validStats.includes(s));
++
++  if (invalidStats.length > 0) {
++    return {
++      stats: [],
++      error: `Invalid stats: ${invalidStats.join(", ")}. Valid options: ${validStats.join(", ")}`,
++    };
++  }
++
++  // Map short names to full property names
++  const statsMapping = {
++    commits: "totalCommits",
++    prs: "totalPRs",
++    issues: "totalIssues",
++    stars: "totalStars",
++    reviews: "totalReviews",
++    discussions_started: "totalDiscussionsStarted",
++    discussions_answered: "totalDiscussionsAnswered",
++    contributed_to: "contributedTo",
++    rank: "rank",
++  };
++
++  return {
++    stats: requestedStats.map((s) => statsMapping[s]),
++  };
++};
++
++/**
++ * Validate format parameter.
++ *
++ * @param {string|undefined} formatParam Format query parameter.
++ * @returns {{format: string, error?: string}} Validation result.
++ */
++const validateFormat = (formatParam) => {
++  const format = formatParam || "detailed";
++  const validFormats = ["detailed", "compact", "leaderboard"];
++
++  if (!validFormats.includes(format)) {
++    return {
++      format: "detailed",
++      error: `Invalid format: ${format}. Valid options: ${validFormats.join(", ")}`,
++    };
++  }
++
++  return { format };
++};
++
++/**
++ * API handler for comparing multiple GitHub users.
++ *
++ * @param {Object} req Request object.
++ * @param {Object} res Response object.
++ * @returns {Promise<void>} Promise that resolves when response is sent.
++ */
++export default async function compareHandler(req, res) {
++  const {
++    format: formatParam,
++    stats: statsParam,
++    include_all_commits,
++    exclude_repo,
++    cache_seconds,
++  } = req.query;
++
++  // Set JSON content type
++  res.setHeader("Content-Type", "application/json");
++
++  // Extract and validate usernames
++  const { usernames, error: usernamesError } = extractUsernames(req.query);
++  if (usernamesError) {
++    res.status(400);
++    return res.json({
++      error: "Bad Request",
++      message: usernamesError,
++      code: "MISSING_PARAMS",
++    });
++  }
++
++  // Validate format
++  const { format, error: formatError } = validateFormat(formatParam);
++  if (formatError) {
++    res.status(400);
++    return res.json({
++      error: "Bad Request",
++      message: formatError,
++      code: "INVALID_FORMAT",
++    });
++  }
++
++  // Validate stats
++  const { stats, error: statsError } = validateStats(statsParam);
++  if (statsError) {
++    res.status(400);
++    return res.json({
++      error: "Bad Request",
++      message: statsError,
++      code: "INVALID_STATS",
++    });
++  }
++
++  // Check access control for all usernames
++  // Note: We implement custom access logic here because guardAccess is designed for SVG responses
++  for (const username of usernames) {
++    // Check whitelist
++    if (Array.isArray(whitelist) && !whitelist.includes(username)) {
++      res.status(403);
++      return res.json({
++        error: "Forbidden",
++        message: "This username is not whitelisted",
++        code: "ACCESS_DENIED",
++      });
++    }
++
++    // Check blacklist
++    if (whitelist === undefined && blacklist.includes(username)) {
++      res.status(403);
++      return res.json({
++        error: "Forbidden",
++        message: "This username is blacklisted",
++        code: "ACCESS_DENIED",
++      });
++    }
++  }
++
++  try {
++    const includeAllCommits = parseBoolean(include_all_commits);
++    const excludeRepos = parseArray(exclude_repo);
++
++    // Determine what additional data to fetch based on stats requested
++    const needsMergedPRs =
++      stats.length === 0 || stats.includes("totalPRsMerged");
++    const needsDiscussions =
++      stats.length === 0 || stats.includes("totalDiscussionsStarted");
++    const needsDiscussionsAnswered =
++      stats.length === 0 || stats.includes("totalDiscussionsAnswered");
++
++    // Fetch stats for all users in parallel
++    const statsPromises = usernames.map((username) =>
++      fetchStats(
++        username,
++        includeAllCommits,
++        excludeRepos,
++        needsMergedPRs,
++        needsDiscussions,
++        needsDiscussionsAnswered,
++      ),
++    );
++
++    const allStats = await Promise.all(statsPromises);
++
++    // Compare users
++    const comparison = compareUsers(allStats, usernames, stats);
++
++    // Set cache headers
++    const cacheSeconds = resolveCacheSeconds({
++      requested: parseInt(cache_seconds, 10),
++      def: CACHE_TTL.COMPARE_API.DEFAULT,
++      min: CACHE_TTL.COMPARE_API.MIN,
++      max: CACHE_TTL.COMPARE_API.MAX,
++    });
++    setCacheHeaders(res, cacheSeconds);
++
++    // Format response based on requested format
++    let response;
++    if (format === "compact") {
++      response = formatCompact(comparison);
++    } else if (format === "leaderboard") {
++      response = formatLeaderboard(comparison);
++    } else {
++      response = comparison; // detailed is the default full format
++    }
++
++    res.status(200);
++    return res.json(response);
++  } catch (err) {
++    // Handle specific error types
++    if (err instanceof CustomError) {
++      if (err.type === CustomError.USER_NOT_FOUND) {
++        res.status(404);
++        return res.json({
++          error: "Not Found",
++          message: err.message,
++          code: "USER_NOT_FOUND",
++        });
++      }
++
++      if (err.type === CustomError.GRAPHQL_ERROR) {
++        res.status(500);
++        return res.json({
++          error: "Internal Server Error",
++          message: err.message,
++          code: "FETCH_ERROR",
++        });
++      }
++    }
++
++    // Generic error handling
++    res.status(500);
++    return res.json({
++      error: "Internal Server Error",
++      message: err instanceof Error ? err.message : "Failed to compare users",
++      code: "INTERNAL_ERROR",
++    });
++  }
++}
+diff --git a/src/comparison/compare.js b/src/comparison/compare.js
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/comparison/compare.js
+@@ -0,0 +1,326 @@
++// @ts-check
++
++/**
++ * Calculate the percentage change between two values relative to a baseline.
++ *
++ * @param {number} value Value to compare.
++ * @param {number} baseline Baseline value.
++ * @returns {number} Percentage change.
++ */
++const calculatePercentageChange = (value, baseline) => {
++  if (baseline === 0) {
++    return value === 0 ? 0 : 100;
++  }
++
++  return ((value - baseline) / baseline) * 100;
++};
++
++/**
++ * Determine the leader for a specific metric.
++ *
++ * @param {Object.<string, number>} userValues Object mapping username to value for the metric.
++ * @returns {{leader: string, leaderValue: number, runnerUpValue: number}} Leader info.
++ */
++const determineLeader = (userValues) => {
++  let leader = "";
++  let leaderValue = -Infinity;
++
++  for (const [username, value] of Object.entries(userValues)) {
++    if (value > leaderValue) {
++      leaderValue = value;
++      leader = username;
++    }
++  }
++
++  const sortedValues = Object.values(userValues).sort((a, b) => b - a);
++  const runnerUpValue = sortedValues.length > 1 ? sortedValues[1] : 0;
++
++  return { leader, leaderValue, runnerUpValue };
++};
++
++/**
++ * Count how many metrics each user leads in.
++ *
++ * @param {Object} diff Diff object with leader info per metric.
++ * @returns {Object.<string, number>} Object mapping username to win count.
++ */
++const countStatsWon = (diff) => {
++  const counts = {};
++
++  for (const [, data] of Object.entries(diff)) {
++    if (data.leader && typeof data.leader === "string") {
++      counts[data.leader] = (counts[data.leader] || 0) + 1;
++    }
++  }
++
++  return counts;
++};
++
++/**
++ * Identify stats where differences are close (within 10%).
++ *
++ * @param {Object} diff Diff object.
++ * @returns {Array<string>} Array of metric names that are close.
++ */
++const identifyCloseStats = (diff) => {
++  const closeStats = [];
++
++  for (const [metric, data] of Object.entries(diff)) {
++    if (data.percentage !== undefined && Math.abs(data.percentage) < 10) {
++      closeStats.push(metric);
++    }
++  }
++
++  return closeStats;
++};
++
++/**
++ * Identify stats with significant differences (over 50%).
++ *
++ * @param {Object} diff Diff object.
++ * @returns {Array<string>} Array of metric names with significant differences.
++ */
++const identifySignificantDifferences = (diff) => {
++  const significantStats = [];
++
++  for (const [metric, data] of Object.entries(diff)) {
++    if (data.percentage !== undefined && Math.abs(data.percentage) > 50) {
++      significantStats.push(metric);
++    }
++  }
++
++  return significantStats;
++};
++
++/**
++ * Compare GitHub statistics between multiple users.
++ *
++ * @param {Array<Object>} usersStats Array of user stats objects from fetchStats.
++ * @param {Array<string>} usernames Array of usernames in the same order.
++ * @param {Array<string>} statsToCompare Array of stat keys to compare (or empty for all).
++ * @returns {Object} Comparison result with detailed, compact, and leaderboard formats.
++ */
++export const compareUsers = (usersStats, usernames, statsToCompare = []) => {
++  const timestamp = new Date().toISOString();
++
++  // Build the data object with each user's stats
++  const data = {};
++  usersStats.forEach((stats, idx) => {
++    const username = usernames[idx];
++    data[username] = {
++      name: stats.name || username,
++      totalCommits: stats.totalCommits || 0,
++      totalPRs: stats.totalPRs || 0,
++      totalPRsMerged: stats.totalPRsMerged || 0,
++      mergedPRsPercentage: stats.mergedPRsPercentage || 0,
++      totalReviews: stats.totalReviews || 0,
++      totalIssues: stats.totalIssues || 0,
++      totalStars: stats.totalStars || 0,
++      totalDiscussionsStarted: stats.totalDiscussionsStarted || 0,
++      totalDiscussionsAnswered: stats.totalDiscussionsAnswered || 0,
++      contributedTo: stats.contributedTo || 0,
++      rank: stats.rank || { level: "C", percentile: 0 },
++    };
++  });
++
++  // Determine which metrics to compare
++  const metricsToCompare =
++    statsToCompare.length > 0
++      ? statsToCompare
++      : [
++          "totalCommits",
++          "totalPRs",
++          "totalPRsMerged",
++          "mergedPRsPercentage",
++          "totalReviews",
++          "totalIssues",
++          "totalStars",
++          "totalDiscussionsStarted",
++          "totalDiscussionsAnswered",
++          "contributedTo",
++        ];
++
++  // Calculate differences for each metric
++  const diff = {};
++
++  metricsToCompare.forEach((metric) => {
++    const userValues = {};
++    usernames.forEach((username) => {
++      userValues[username] = data[username][metric] || 0;
++    });
++
++    const { leader, leaderValue, runnerUpValue } = determineLeader(userValues);
++
++    const differences = {};
++    const percentages = {};
++
++    usernames.forEach((username) => {
++      differences[username] = userValues[username] - leaderValue;
++      percentages[username] = calculatePercentageChange(
++        userValues[username],
++        leaderValue,
++      );
++    });
++
++    const difference = leaderValue - runnerUpValue;
++    const percentage =
++      runnerUpValue === 0
++        ? difference === 0
++          ? 0
++          : 100
++        : (difference / runnerUpValue) * 100;
++
++    diff[metric] = {
++      ...userValues,
++      difference,
++      percentage: Math.abs(percentage),
++      leader,
++      differences,
++      percentages,
++    };
++  });
++
++  // Add rank comparison
++  if (usernames.every((u) => data[u].rank)) {
++    const rankPercentiles = {};
++    usernames.forEach((username) => {
++      rankPercentiles[username] = data[username].rank.percentile;
++    });
++
++    const { leader: rankLeader } = determineLeader(rankPercentiles);
++    const rankDifferences = {};
++
++    usernames.forEach((username) => {
++      rankDifferences[username] =
++        rankPercentiles[username] - rankPercentiles[rankLeader];
++    });
++
++    diff.rank = {};
++    usernames.forEach((username) => {
++      diff.rank[username] = data[username].rank;
++    });
++    diff.rank.percentileDifference =
++      Math.max(...Object.values(rankPercentiles)) -
++      Math.min(...Object.values(rankPercentiles));
++    diff.rank.leader = rankLeader;
++  }
++
++  // Calculate summary
++  const statsWon = countStatsWon(diff);
++
++  // Ensure every user appears in stats_won map
++  usernames.forEach((username) => {
++    if (statsWon[username] === undefined) {
++      statsWon[username] = 0;
++    }
++  });
++
++  const statsWonEntries = Object.entries(statsWon).sort((a, b) => b[1] - a[1]);
++  const overallLeader = statsWonEntries.length
++    ? statsWonEntries[0][0]
++    : usernames[0];
++
++  const summary = {
++    overall_leader: overallLeader,
++    stats_won: statsWon,
++    close_stats: identifyCloseStats(diff),
++    significant_differences: identifySignificantDifferences(diff),
++  };
++
++  return {
++    comparison: {
++      users: usernames,
++      timestamp,
++      cached: false,
++    },
++    data,
++    diff,
++    summary,
++  };
++};
++
++/**
++ * Format comparison result for compact output.
++ *
++ * @param {Object} fullComparison Full comparison result from compareUsers.
++ * @returns {Object} Compact format.
++ */
++export const formatCompact = (fullComparison) => {
++  const { comparison, diff, summary } = fullComparison;
++
++  const compactDiff = {};
++
++  for (const [metric, data] of Object.entries(diff)) {
++    if (metric === "rank") {
++      continue;
++    }
++
++    const userValues = {};
++    comparison.users.forEach((username) => {
++      userValues[username] = data[username];
++    });
++
++    compactDiff[metric] = {
++      ...userValues,
++      delta: data.difference,
++      leader: data.leader,
++    };
++  }
++
++  return {
++    users: comparison.users,
++    timestamp: comparison.timestamp,
++    diff: compactDiff,
++    leader: summary.overall_leader,
++  };
++};
++
++/**
++ * Format comparison result for leaderboard output.
++ *
++ * @param {Object} fullComparison Full comparison result from compareUsers.
++ * @returns {Object} Leaderboard format.
++ */
++export const formatLeaderboard = (fullComparison) => {
++  const { comparison, data, summary } = fullComparison;
++
++  const leaderboard = comparison.users.map((username) => {
++    const userData = data[username];
++
++    // Calculate total score for sorting
++    const totalScore =
++      userData.totalCommits * 1 +
++      userData.totalPRs * 2 +
++      userData.totalStars * 0.5 +
++      userData.totalIssues * 1 +
++      userData.totalReviews * 2 +
++      (userData.rank?.percentile || 0) * 10;
++
++    return {
++      username,
++      totalScore: Math.round(totalScore),
++      stats: {
++        totalCommits: userData.totalCommits,
++        totalPRs: userData.totalPRs,
++        totalStars: userData.totalStars,
++        totalIssues: userData.totalIssues,
++        totalReviews: userData.totalReviews,
++        rank: userData.rank,
++      },
++      wins: summary.stats_won[username] || 0,
++    };
++  });
++
++  // Sort by total score descending
++  leaderboard.sort((a, b) => b.totalScore - a.totalScore);
++
++  // Add rank positions
++  leaderboard.forEach((entry, idx) => {
++    entry.rank = idx + 1;
++  });
++
++  return {
++    leaderboard,
++    timestamp: comparison.timestamp,
++  };
++};
+diff --git a/src/common/cache.js b/src/common/cache.js
+index 0000000..0000000 100644
+--- a/src/common/cache.js
++++ b/src/common/cache.js
+@@ -0,0 +1,158 @@
++// @ts-check
++
++import { clampValue } from "./ops.js";
++
++const MIN = 60;
++const HOUR = 60 * MIN;
++const DAY = 24 * HOUR;
++
++/**
++ * Common durations in seconds.
++ */
++const DURATIONS = {
++  ONE_MINUTE: MIN,
++  FIVE_MINUTES: 5 * MIN,
++  TEN_MINUTES: 10 * MIN,
++  FIFTEEN_MINUTES: 15 * MIN,
++  THIRTY_MINUTES: 30 * MIN,
++
++  TWO_HOURS: 2 * HOUR,
++  FOUR_HOURS: 4 * HOUR,
++  SIX_HOURS: 6 * HOUR,
++  EIGHT_HOURS: 8 * HOUR,
++  TWELVE_HOURS: 12 * HOUR,
++
++  ONE_DAY: DAY,
++  TWO_DAY: 2 * DAY,
++  SIX_DAY: 6 * DAY,
++  TEN_DAY: 10 * DAY,
++};
++
++/**
++ * Common cache TTL values in seconds.
++ */
++const CACHE_TTL = {
++  STATS_CARD: {
++    DEFAULT: DURATIONS.ONE_DAY,
++    MIN: DURATIONS.TWELVE_HOURS,
++    MAX: DURATIONS.TWO_DAY,
++  },
++  COMPARE_API: {
++    DEFAULT: HOUR,
++    MIN: DURATIONS.FIFTEEN_MINUTES,
++    MAX: DURATIONS.ONE_DAY,
++  },
++  TOP_LANGS_CARD: {
++    DEFAULT: DURATIONS.SIX_DAY,
++    MIN: DURATIONS.TWO_DAY,
++    MAX: DURATIONS.TEN_DAY,
++  },
++  PIN_CARD: {
++    DEFAULT: DURATIONS.TEN_DAY,
++    MIN: DURATIONS.ONE_DAY,
++    MAX: DURATIONS.TEN_DAY,
++  },
++  GIST_CARD: {
++    DEFAULT: DURATIONS.TWO_DAY,
++    MIN: DURATIONS.ONE_DAY,
++    MAX: DURATIONS.TEN_DAY,
++  },
++  WAKATIME_CARD: {
++    DEFAULT: DURATIONS.ONE_DAY,
++    MIN: DURATIONS.TWELVE_HOURS,
++    MAX: DURATIONS.TWO_DAY,
++  },
++  ERROR: DURATIONS.TEN_MINUTES,
++};
++
++/**
++ * Resolves the cache seconds based on the requested, default, min, and max values.
++ *
++ * @param {Object} args The parameters object.
++ * @param {number} args.requested The requested cache seconds.
++ * @param {number} args.def The default cache seconds.
++ * @param {number} args.min The minimum cache seconds.
++ * @param {number} args.max The maximum cache seconds.
++ * @returns {number} The resolved cache seconds.
++ */
++const resolveCacheSeconds = ({ requested, def, min, max }) => {
++  let cacheSeconds = clampValue(isNaN(requested) ? def : requested, min, max);
++
++  if (process.env.CACHE_SECONDS) {
++    const envCacheSeconds = parseInt(process.env.CACHE_SECONDS, 10);
++    if (!isNaN(envCacheSeconds)) {
++      cacheSeconds = envCacheSeconds;
++    }
++  }
++
++  return cacheSeconds;
++};
++
++/**
++ * Disables caching by setting appropriate headers on the response object.
++ *
++ * @param {any} res The response object.
++ */
++const disableCaching = (res) => {
++  // Disable caching for browsers, shared caches/CDNs, and GitHub Camo.
++  res.setHeader(
++    "Cache-Control",
++    "no-cache, no-store, must-revalidate, max-age=0, s-maxage=0",
++  );
++  res.setHeader("Pragma", "no-cache");
++  res.setHeader("Expires", "0");
++};
++
++/**
++ * Sets the Cache-Control headers on the response object.
++ *
++ * @param {any} res The response object.
++ * @param {number} cacheSeconds The cache seconds to set in the headers.
++ */
++const setCacheHeaders = (res, cacheSeconds) => {
++  if (cacheSeconds < 1 || process.env.NODE_ENV === "development") {
++    disableCaching(res);
++    return;
++  }
++
++  res.setHeader(
++    "Cache-Control",
++    `max-age=${cacheSeconds}, ` +
++      `s-maxage=${cacheSeconds}, ` +
++      `stale-while-revalidate=${DURATIONS.ONE_DAY}`,
++  );
++};
++
++/**
++ * Sets the Cache-Control headers for error responses on the response object.
++ *
++ * @param {any} res The response object.
++ */
++const setErrorCacheHeaders = (res) => {
++  const envCacheSeconds = process.env.CACHE_SECONDS
++    ? parseInt(process.env.CACHE_SECONDS, 10)
++    : NaN;
++  if (
++    (!isNaN(envCacheSeconds) && envCacheSeconds < 1) ||
++    process.env.NODE_ENV === "development"
++  ) {
++    disableCaching(res);
++    return;
++  }
++
++  // Use lower cache period for errors.
++  res.setHeader(
++    "Cache-Control",
++    `max-age=${CACHE_TTL.ERROR}, ` +
++      `s-maxage=${CACHE_TTL.ERROR}, ` +
++      `stale-while-revalidate=${DURATIONS.ONE_DAY}`,
++  );
++};
++
++export {
++  resolveCacheSeconds,
++  setCacheHeaders,
++  setErrorCacheHeaders,
++  DURATIONS,
++  CACHE_TTL,
++};
+diff --git a/RECONCILIATION_ANALYSIS.md b/RECONCILIATION_ANALYSIS.md
+index 0000000..0000000 100644
+--- a/RECONCILIATION_ANALYSIS.md
++++ b/RECONCILIATION_ANALYSIS.md
+@@ -0,0 +1,133 @@
++# Reconciliation Analysis: Tests vs Specification
++
++## Executive Summary
++
++The reviewer's feedback is **CORRECT**. There is a fundamental mismatch between the specification (PR #2, commit 983b63a) and the implementation/tests (PR #3, commits 2cd2c55 and 68146db).
++
++## Key Misalignments
++
++### 1. Parameter Interface (ERROR)
++
++**Specification says:**
++- Parameters: `user1`, `user2`, `user3`, `user4`, `user5` (individual query params)
++- Example: `?user1=alice&user2=bob&user3=charlie`
++
++**Implementation/Tests use:**
++- Parameter: `usernames` (single CSV string)
++- Example: `?usernames=alice,bob,charlie`
++
++**Impact:** API interface is completely different from spec.
++
++### 2. Format Options (ERROR)
++
++**Specification says:**
++- Valid formats: `detailed`, `compact`, `leaderboard`
++- All responses are JSON with different structures
++
++**Implementation/Tests use:**
++- Valid formats: `json`, `markdown`
++- Markdown returns plain text, not JSON
++
++**Impact:** Output formats don't match spec at all.
++
++### 3. Response Structure (ERROR)
++
++**Specification shows:**
++```json
++{
++  "comparison": {
++    "users": ["alice", "bob"],
++    "timestamp": "...",
++    "cached": false
++  },
++  "data": { ... },
++  "diff": { ... },
++  "summary": { ... }
++}
++```
++
++**Implementation returns:**
++```json
++{
++  "leader": "user2",
++  "comparisons": [...],
++  "diffs": {...}
++}
++```
++
++**Impact:** Response structure is completely different.
++
++### 4. File Structure (WARNING)
++
++**Specification implies:**
++- Detailed architecture with multiple modules
++- File location `/src/comparison/*.js` suggested in context
++
++**Implementation uses:**
++- Single file `/src/compare.js`
++- Functions: `compareUsers()`, `formatComparison()`
++
++**Impact:** Tests are coupled to implementation details (importing specific functions).
++
++### 5. Missing Test Coverage (ERROR)
++
++**Specification requires testing:**
++- ✗ `detailed`, `compact`, `leaderboard` formats
++- ✗ `stats` parameter filtering
++- ✗ `exclude_repo` parameter
++- ✗ `include_all_commits` parameter
++- ✗ `cache_seconds` parameter
++- ✗ Percentage difference calculations
++- ✗ Leader identification per metric
++- ✗ Unknown format errors
++- ✗ Unknown stats errors
++- ✗ Whitelist/blacklist behavior
++
++**Tests actually cover:**
++- ✓ Basic validation (missing params, count limits)
++- ✓ Two-user comparison
++- ✓ Three-user comparison
++- ✓ Error handling
++- ✓ Cache headers (basic)
++- ✓ Markdown format (not in spec!)
++
++**Impact:** Major spec requirements are untested.
++
++## Recommendations
++
++### Must Fix (Breaking Issues)
++
++1. **Change parameter interface** from `usernames` CSV to `user1`, `user2`, etc.
++2. **Replace `markdown` format** with `detailed`, `compact`, `leaderboard` formats
++3. **Update response structure** to match spec exactly
++4. **Add missing test cases** for all spec requirements
++5. **Remove implementation detail tests** (don't import/test `compareUsers`, `formatComparison` directly)
++
++### Should Fix (Quality Issues)
++
++1. **Decouple tests from implementation** - test the API endpoint behavior only
++2. **Add validation tests** for unknown formats and stats
++3. **Add cache behavior tests** with different `cache_seconds` values
++4. **Test percentage calculations** explicitly
++
++### Could Fix (Nice to Have)
++
++1. Update spec to be more specific about file structure expectations
++2. Add integration tests for the full API flow
++3. Document decision rationale for parameter style choice
++
++## Action Plan
++
++Since we're on branch `reconcile-tests-and-spec`, the task is to fix this mismatch. The spec (PR #2) is the authoritative source, so we need to:
++
++1. ✅ Create this analysis document
++2. ✅ Update implementation to match spec parameters (`user1`, `user2`, etc.)
++3. ✅ Implement `detailed`, `compact`, `leaderboard` formats (remove `markdown`)
++4. ✅ Update response structure to match spec
++5. ✅ Rewrite tests to match spec requirements
++6. ✅ Add missing test coverage
++7. ✅ Ensure tests focus on API behavior, not implementation details
++
++## Conclusion
++
++The reviewer's analysis is accurate and thorough. Both the problem description (spec) and the tests/implementation need significant changes to be reconciled into a coherent, implementable feature.
