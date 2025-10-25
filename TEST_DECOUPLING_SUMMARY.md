@@ -83,24 +83,38 @@ Updated repository memory with best practices for writing behavior-focused tests
 ## Files Changed
 
 - `tests/api-compare.test.js` - Refactored test suite with behavioral focus and abstraction-level mocking
-- `test.patch` - Patch file containing test.sh runner and test suite
+- `test.patch` - Patch file containing test.sh runner (with automatic PAT setup) and test suite
+- `test.sh` - Test runner script that exports a dummy PAT_1 token when not provided
 - `COMPARE_API_SPEC.md` - Specification document defining the API contract
 - `TEST_DECOUPLING_SUMMARY.md` - This document
 
 ## Verification
 
-Tests can be run with:
+### Using test.sh (Recommended)
+
+The test runner automatically configures the required PAT_1 token:
+
 ```bash
+./test.sh base    # Run existing baseline tests (should pass)
+./test.sh new     # Run new compare tests (will fail until implementation exists)
+```
+
+### Manual Execution
+
+If running tests manually, set a dummy PAT token first:
+
+```bash
+export PAT_1="test_pat_token"
 npm test tests/api-compare.test.js
 ```
 
-Or using the test runner:
-```bash
-./test.sh new     # Run new compare tests (will fail until implementation exists)
-./test.sh base    # Run existing baseline tests (should pass)
-```
+### Important Note
 
-The tests will fail until the `/api/compare.js` (or `.ts`) handler is implemented, but they now test the correct behavioral contract rather than internal implementation details.
+The tests require `PAT_1` to be set because the API handlers validate token presence during initialization. The test.sh script handles this automatically by setting a dummy token when one isn't provided.
+
+See `TEST_SETUP.md` for troubleshooting "No GitHub API tokens found" errors.
+
+The new tests will fail until the `/api/compare.js` (or `.ts`) handler is implemented, but they now test the correct behavioral contract rather than internal implementation details.
 
 ## How to Implement
 

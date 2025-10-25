@@ -332,6 +332,28 @@ The test suite now comprehensively covers:
 
 See `ADDITIONAL_TEST_COVERAGE.md` for detailed documentation of each new test.
 
+## Test Execution Setup
+
+### PAT Token Requirement
+
+The tests require a GitHub API token (PAT_1) to be present in the environment, even though API responses are mocked. This is because the API handlers validate token presence during initialization.
+
+The `test.sh` script automatically handles this:
+
+```bash
+export PAT_1="${PAT_1:-test_pat_token}"
+```
+
+This ensures baseline tests pass without requiring a real GitHub token.
+
+**Usage:**
+```bash
+./test.sh base  # Runs baseline tests with auto-configured token
+./test.sh new   # Runs new compare tests
+```
+
+See `TEST_SETUP.md` for detailed troubleshooting if you encounter "No GitHub API tokens found" errors.
+
 ## Compatibility
 
 The tests are now compatible with:

@@ -1,11 +1,14 @@
 diff --git a/test.sh b/test.sh
 new file mode 100755
-index 0000000..6c88082
+index 0000000..c1da0f5
 --- /dev/null
 +++ b/test.sh
-@@ -0,0 +1,17 @@
+@@ -0,0 +1,20 @@
 +#!/bin/bash
 +set -e
++
++# Ensure PAT token is set for tests to prevent "No GitHub API tokens found" errors
++export PAT_1="${PAT_1:-test_pat_token}"
 +
 +case "$1" in
 +  base)
