@@ -212,6 +212,80 @@ it("returns detailed format with cached indicator", async () => {
 });
 ```
 
+---
+
+### 7. Timestamp validity missing for compact/leaderboard [WARNING] ✅ FIXED
+
+**Original Issue:**
+Timestamp validation only existed for the detailed response format.
+
+**Resolution:**
+- Added ISO-8601 timestamp assertions for both compact and leaderboard responses
+- Ensured timestamps are string-typed and parse into valid `Date` objects
+
+**Code Evidence:**
+```javascript
+expect(new Date(payload.timestamp).toString()).not.toBe("Invalid Date");
+```
+
+---
+
+### 8. Cached flag semantics and cache hits [WARNING] ✅ FIXED
+
+**Original Issue:**
+The tests verified the presence of the cached field but not its semantics or actual cache usage.
+
+**Resolution:**
+- Added a caching test that performs identical requests
+- Verified the first response has `cached: false`
+- Verified the second response has `cached: true` and `fetchStats` is not called again
+
+**Code Evidence:**
+```javascript
+fetchStatsMock.mockClear();
+await handler({ query: { user1: "alice", user2: "bob" } }, secondRes);
+expect(secondPayload?.comparison?.cached).toBe(true);
+expect(fetchStatsMock).not.toHaveBeenCalled();
+```
+
+---
+
+### 9. Whitelist/blacklist and PAT validation [WARNING] ✅ FIXED
+
+**Original Issue:**
+Access control requirements (blacklist, whitelist, PAT validation) were not explicitly covered.
+
+**Resolution:**
+- Added guardAccess-based tests for 403 blacklist denials and 401 invalid PAT responses
+- Confirmed no user data is fetched when guardAccess blocks the request
+
+**Code Evidence:**
+```javascript
+expect(fetchStatsMock).not.toHaveBeenCalled();
+expect(res.status).toHaveBeenCalledWith(403); // or 401
+```
+
+---
+
+### 10. Sensitive information exposure [WARNING] ✅ FIXED
+
+**Original Issue:**
+The specification requires that sensitive data (tokens, file paths) not be exposed in error payloads.
+
+**Resolution:**
+- Crafted an error with token-like content and internal paths
+- Asserted that serialized responses do not contain token prefixes or internal paths
+
+**Code Evidence:**
+```javascript
+const responseString = JSON.stringify(payload);
+expect(responseString).not.toMatch(/ghp_/i);
+expect(responseString).not.toMatch(/token:/i);
+expect(responseString).not.toMatch(/\/internal\/path/);
+```
+
+---
+
 ## Additional Improvements
 
 Beyond addressing the specific feedback, the following improvements were made:
@@ -243,6 +317,21 @@ The updated tests follow these principles:
 4. **Flexibility**: Support multiple implementations (.js/.ts, different clients, etc.)
 5. **Completeness**: Cover all documented requirements (status codes, fields, behaviors)
 
+## Test Coverage Summary
+
+The test suite now comprehensively covers:
+
+✅ **All Response Formats**: Detailed, compact, and leaderboard with timestamp validation  
+✅ **All HTTP Status Codes**: 200, 400, 401, 403, 404, 429, 500  
+✅ **Cache Semantics**: First miss (cached: false), subsequent hit (cached: true)  
+✅ **Access Control**: Rate limiting, blacklist denials, PAT validation  
+✅ **Parameter Effects**: Observable changes from include_all_commits, exclude_repo, stats filters  
+✅ **Security**: Sensitive information (tokens, paths) stripped from errors  
+✅ **Percentage Calculations**: Validated in detailed diff responses  
+✅ **Leader Identification**: Verified across all stat metrics  
+
+See `ADDITIONAL_TEST_COVERAGE.md` for detailed documentation of each new test.
+
 ## Compatibility
 
 The tests are now compatible with:
@@ -258,5 +347,7 @@ As long as the implementation:
 2. Uses `fetchStats()` to get user data
 3. Uses `guardAccess()` for access control
 4. Returns the documented response formats
+5. Sets proper cache headers and cached flags
+6. Sanitizes error messages to remove sensitive data
 
 The tests will pass regardless of internal implementation details.

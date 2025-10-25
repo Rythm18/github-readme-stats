@@ -102,6 +102,7 @@ beforeEach(() => {
   fetchStatsMock.mockReset();
   guardAccessMock.mockReset();
   guardAccessMock.mockReturnValue({ isPassed: true, result: undefined });
+  loadCompareHandler.cached = undefined;
 });
 
 afterEach(() => {
@@ -283,6 +284,23 @@ describe("GET /api/compare", () => {
         );
       });
     });
+
+    it("includes valid ISO-8601 timestamp", async () => {
+      fetchStatsMock
+        .mockResolvedValueOnce(makeStats("alice"))
+        .mockResolvedValueOnce(makeStats("bob"));
+
+      const res = await invokeCompare({
+        user1: "alice",
+        user2: "bob",
+        format: "compact",
+      });
+      const payload = getPayload(res);
+
+      expect(payload.timestamp).toBeDefined();
+      expect(typeof payload.timestamp).toBe("string");
+      expect(new Date(payload.timestamp).toString()).not.toBe("Invalid Date");
+    });
   });
 
   describe("response format: leaderboard", () => {
@@ -321,6 +339,25 @@ describe("GET /api/compare", () => {
       });
       const ranks = payload.leaderboard.map((entry) => entry.rank);
       expect(ranks).toEqual([...ranks].sort((a, b) => a - b));
+    });
+
+    it("includes valid timestamp in leaderboard response", async () => {
+      fetchStatsMock
+        .mockResolvedValueOnce(makeStats("alice"))
+        .mockResolvedValueOnce(makeStats("bob"))
+        .mockResolvedValueOnce(makeStats("charlie"));
+
+      const res = await invokeCompare({
+        user1: "alice",
+        user2: "bob",
+        user3: "charlie",
+        format: "leaderboard",
+      });
+      const payload = getPayload(res);
+
+      expect(payload.timestamp).toBeDefined();
+      expect(typeof payload.timestamp).toBe("string");
+      expect(new Date(payload.timestamp).toString()).not.toBe("Invalid Date");
     });
   });
 
@@ -420,6 +457,31 @@ describe("GET /api/compare", () => {
     });
   });
 
+  describe("caching", () => {
+    it("marks repeated requests as cached without refetching", async () => {
+      fetchStatsMock
+        .mockResolvedValueOnce(makeStats("alice"))
+        .mockResolvedValueOnce(makeStats("bob"));
+
+      const handler = await loadCompareHandler();
+
+      const firstRes = createMockResponse();
+      await handler({ query: { user1: "alice", user2: "bob" } }, firstRes);
+      const firstPayload = getPayload(firstRes);
+
+      expect(firstPayload?.comparison?.cached).toBe(false);
+
+      fetchStatsMock.mockClear();
+
+      const secondRes = createMockResponse();
+      await handler({ query: { user1: "alice", user2: "bob" } }, secondRes);
+      const secondPayload = getPayload(secondRes);
+
+      expect(secondPayload?.comparison?.cached).toBe(true);
+      expect(fetchStatsMock).not.toHaveBeenCalled();
+    });
+  });
+
   describe("error handling", () => {
     it("returns 404 when a user cannot be found", async () => {
       const error = new Error("User not found");
@@ -461,6 +523,28 @@ describe("GET /api/compare", () => {
         }),
       );
     });
+
+    it("does not expose sensitive information in error responses", async () => {
+      const errorWithSensitiveInfo = new Error("Connection failed");
+      errorWithSensitiveInfo.stack =
+        "Error at /internal/path/api/compare.js:123\ntoken: ghp_secrettoken123";
+
+      fetchStatsMock.mockRejectedValueOnce(errorWithSensitiveInfo);
+
+      const res = await invokeCompare({ user1: "alice", user2: "bob" });
+      const payload = getPayload(res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+
+      const responseString = JSON.stringify(payload);
+      expect(responseString).not.toMatch(/ghp_/i);
+      expect(responseString).not.toMatch(/token:/i);
+      expect(responseString).not.toMatch(/\/internal\/path/);
+      expect(responseString).not.toMatch(/\.js:\d+/);
+
+      expect(payload.message).toBeDefined();
+      expect(payload.message).not.toContain("ghp_");
+    });
   });
 
   describe("access control", () => {
@@ -480,6 +564,48 @@ describe("GET /api/compare", () => {
           message: expect.stringMatching(/rate/i),
         }),
       );
+    });
+
+    it("blocks blacklisted usernames via guardAccess", async () => {
+      const res = createMockResponse();
+      guardAccessMock.mockReturnValueOnce({
+        isPassed: false,
+        result: res
+          .status(403)
+          .json({ message: "This username is blacklisted" }),
+      });
+
+      const handler = await loadCompareHandler();
+      await handler({ query: { user1: "renovate-bot", user2: "bob" } }, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringMatching(/blacklist/i),
+        }),
+      );
+      expect(fetchStatsMock).not.toHaveBeenCalled();
+    });
+
+    it("rejects invalid PAT tokens before processing", async () => {
+      const res = createMockResponse();
+      guardAccessMock.mockReturnValueOnce({
+        isPassed: false,
+        result: res
+          .status(401)
+          .json({ message: "Invalid personal access token" }),
+      });
+
+      const handler = await loadCompareHandler();
+      await handler({ query: { user1: "alice", user2: "bob" } }, res);
+
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringMatching(/token/i),
+        }),
+      );
+      expect(fetchStatsMock).not.toHaveBeenCalled();
     });
   });
 

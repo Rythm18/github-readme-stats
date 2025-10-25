@@ -31,9 +31,10 @@ The original tests for `/api/compare` suffered from tight coupling to implementa
 - ✅ Cached indicator is present in detailed format
 - ✅ Cache headers are set appropriately
 - ✅ Parameters have observable effects (include_all_commits, exclude_repo, stats filtering)
-- ✅ ISO-8601 timestamps are valid
-- ✅ Rate limiting returns 429
-- ✅ Access control via guardAccess is respected
+- ✅ ISO-8601 timestamps are valid across all formats
+- ✅ Cached flag semantics (first miss, subsequent hit) are enforced
+- ✅ Rate limiting returns 429 and guard-based denials are respected (blacklist, invalid PAT)
+- ✅ Responses strip sensitive details from error messages
 
 **What Tests NO LONGER Enforce:**
 - ❌ Specific error code constants
