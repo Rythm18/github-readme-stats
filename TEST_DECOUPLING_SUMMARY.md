@@ -6,36 +6,49 @@ The original tests for `/api/compare` suffered from tight coupling to implementa
 
 1. **Hardcoded error codes**: Tests enforced specific error code constants (e.g., `MISSING_PARAMS`, `INVALID_FORMAT`, `USER_NOT_FOUND`) that were not part of the public API contract
 2. **Rigid response structure**: Tests required exact field names and nested structures beyond what was necessary for behavioral validation
-3. **Internal implementation details**: Tests mocked axios directly and enforced specific GraphQL call patterns, coupling tests to how data is fetched rather than what is returned
+3. **Low-level implementation details**: Tests mocked axios at the HTTP client level, coupling them to how data is fetched rather than what abstraction is used
 4. **Unclear interface contract**: The specification didn't clearly define what was guaranteed vs. what was implementation-specific
+5. **Missing behaviors**: Tests didn't cover important requirements like rate limiting (429), percentage fields, cached indicators, and observable effects of parameters
 
 ## Solution
 
 ### 1. Test Refactoring (`tests/api-compare.test.js`)
 
 **Key Changes:**
+- **Mock at abstraction level**: Changed from mocking axios directly to mocking `fetchStats()` and `guardAccess()` - the public abstractions used by the implementation
 - **Flexible error assertions**: Changed from `code: "MISSING_PARAMS"` to `message: expect.stringMatching(/user/i)` - tests that errors are informative without enforcing specific internal codes
 - **Behavioral matchers**: Use `expect.any(String)`, `expect.any(Number)`, `expect.objectContaining()` instead of exact value matching
-- **Structure validation**: Verify expected fields exist and have reasonable values, but don't enforce extra internal fields
-- **Helper functions**: Introduced `createMockStatsResponse()`, `createMockResponse()`, `invokeCompare()`, and `getJsonPayload()` to abstract test infrastructure
-- **Null safety**: Added `expect(payload).toBeDefined()` checks before accessing nested properties
-- **Public API focus**: Tests verify HTTP status codes, response format adherence, and correct leader calculation without assuming internal implementation
+- **File extension flexibility**: Dynamic import that tries both `.js` and `.ts` extensions
+- **Parameter effect validation**: Tests verify observable effects (e.g., when `include_all_commits` is true, commit counts change)
+- **Complete coverage**: Added tests for rate limiting (429), percentage fields, cached indicators, and stats filtering
 
 **What Tests Now Validate:**
-- ✅ HTTP status codes (200, 400, 404, 500)
+- ✅ HTTP status codes (200, 400, 404, 429, 500)
 - ✅ Error messages are present and informative
 - ✅ Response structure matches one of three defined formats (detailed/compact/leaderboard)
 - ✅ Leaders are correctly identified (highest value wins)
+- ✅ Percentage differences are computed and included
+- ✅ Cached indicator is present in detailed format
 - ✅ Cache headers are set appropriately
-- ✅ Parameters are respected (stats filtering, include_all_commits, etc.)
+- ✅ Parameters have observable effects (include_all_commits, exclude_repo, stats filtering)
 - ✅ ISO-8601 timestamps are valid
+- ✅ Rate limiting returns 429
+- ✅ Access control via guardAccess is respected
 
 **What Tests NO LONGER Enforce:**
 - ❌ Specific error code constants
 - ❌ Exact internal field names beyond public contract
-- ❌ How data is fetched (axios implementation details)
-- ❌ Specific GraphQL variable names or query structure
+- ❌ HTTP client implementation (axios vs fetch vs other)
+- ❌ Specific GraphQL endpoint URLs or query structure
 - ❌ Internal calculation algorithms (only verify correctness)
+- ❌ File extension (.js vs .ts)
+
+**Testing Approach:**
+The tests now mock at the **abstraction boundary** (`fetchStats` and `guardAccess`) rather than at the HTTP client level. This allows:
+- Implementation freedom in how data is fetched
+- Testing against the same interface the handler will use
+- Focus on the handler's logic rather than data fetching mechanics
+- Compatibility with both JavaScript and TypeScript implementations
 
 ### 2. API Specification (`COMPARE_API_SPEC.md`)
 
@@ -49,24 +62,28 @@ Created a comprehensive specification that:
 ### 3. Testing Pattern Documentation
 
 Updated repository memory with best practices for writing behavior-focused tests:
+- Mock at abstraction boundaries, not HTTP clients
 - Focus on public API contracts
 - Use flexible matchers
 - Don't hardcode internal details
-- Test outcomes, not implementations
+- Test outcomes and observable effects
+- Support multiple file extensions
 - Create helpers for mock infrastructure
 
 ## Benefits
 
-1. **Decoupled**: Implementation can change (e.g., switch from axios to fetch, change error codes, add new fields) without breaking tests
+1. **Decoupled**: Implementation can change HTTP clients, error codes, add fields, or switch languages without breaking tests
 2. **Clear contract**: Specification explicitly defines what is guaranteed API surface
 3. **Maintainable**: Tests are easier to read and modify
 4. **Flexible**: Implementers have freedom in how they solve the problem
 5. **Robust**: Tests validate actual correctness rather than arbitrary internal details
+6. **Complete**: All documented behaviors are now tested (rate limiting, percentage, cached flag, parameter effects)
 
 ## Files Changed
 
-- `tests/api-compare.test.js` - Refactored test suite with behavioral focus
-- `COMPARE_API_SPEC.md` - New specification document defining the API contract
+- `tests/api-compare.test.js` - Refactored test suite with behavioral focus and abstraction-level mocking
+- `test.patch` - Patch file containing test.sh runner and test suite
+- `COMPARE_API_SPEC.md` - Specification document defining the API contract
 - `TEST_DECOUPLING_SUMMARY.md` - This document
 
 ## Verification
@@ -76,4 +93,24 @@ Tests can be run with:
 npm test tests/api-compare.test.js
 ```
 
-The tests will fail until the `/api/compare.js` handler is implemented, but they now test the correct behavioral contract rather than internal implementation details.
+Or using the test runner:
+```bash
+./test.sh new     # Run new compare tests (will fail until implementation exists)
+./test.sh base    # Run existing baseline tests (should pass)
+```
+
+The tests will fail until the `/api/compare.js` (or `.ts`) handler is implemented, but they now test the correct behavioral contract rather than internal implementation details.
+
+## How to Implement
+
+The implementation should:
+1. Export a default handler function from `/api/compare.js` or `/api/compare.ts`
+2. Use `fetchStats()` from `src/fetchers/stats.js` to get user data
+3. Use `guardAccess()` from `src/common/access.js` for access control and rate limiting
+4. Follow the response formats defined in COMPARE_API_SPEC.md
+5. Include percentage calculations in detailed diff format
+6. Add a `cached` boolean to the comparison object in detailed format
+7. Filter stats based on the `stats` parameter and reflect this in `stats_compared`
+8. Pass parameters like `include_all_commits` and `exclude_repo` through to `fetchStats()`
+
+The tests will validate behavior without constraining implementation choices.

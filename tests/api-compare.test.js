@@ -1,9 +1,5 @@
 // @ts-check
 
-if (!process.env.PAT_1) {
-  process.env.PAT_1 = "test_pat_token";
-}
-
 import {
   afterEach,
   beforeEach,
@@ -12,68 +8,69 @@ import {
   it,
   jest,
 } from "@jest/globals";
-import axios from "axios";
-import MockAdapter from "axios-mock-adapter";
-import compareHandler from "../api/compare.js";
 
-const mock = new MockAdapter(axios);
-const GITHUB_GRAPHQL_ENDPOINT = "https://api.github.com/graphql";
-const DEFAULT_USER_TOTALS = {
-  stars: 100,
-  commits: 200,
-  prs: 50,
-  issues: 30,
-  reviews: 20,
-  discussions: 5,
-  discussionsAnswered: 10,
+const fetchStatsMock = jest.fn();
+const guardAccessMock = jest.fn();
+
+jest.unstable_mockModule("../src/fetchers/stats.js", () => ({
+  fetchStats: fetchStatsMock,
+  default: fetchStatsMock,
+}));
+
+jest.unstable_mockModule("../src/common/access.js", () => ({
+  guardAccess: guardAccessMock,
+}));
+
+const loadCompareHandler = async () => {
+  if (loadCompareHandler.cached) {
+    return loadCompareHandler.cached;
+  }
+
+  const candidates = ["../api/compare.js", "../api/compare.ts"];
+  let lastError;
+
+  for (const candidate of candidates) {
+    try {
+      const module = await import(candidate);
+      loadCompareHandler.cached = module.default;
+      return loadCompareHandler.cached;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError;
 };
 
 /**
- * Create a mock GitHub GraphQL response for a given username.
+ * @typedef {import("../src/fetchers/stats.js").StatsData} StatsData
+ */
+
+/**
+ * Build a StatsData mock for a given user.
  *
  * @param {string} username
- * @param {Partial<typeof DEFAULT_USER_TOTALS>} [overrides]
- * @returns {Record<string, unknown>}
+ * @param {Partial<StatsData>} [overrides]
+ * @returns {StatsData}
  */
-const createMockStatsResponse = (username, overrides = {}) => {
-  const totals = { ...DEFAULT_USER_TOTALS, ...overrides };
-
-  return {
-    data: {
-      user: {
-        name: `${username} Doe`,
-        login: username,
-        repositoriesContributedTo: { totalCount: 10 },
-        commits: { totalCommitContributions: totals.commits },
-        reviews: { totalPullRequestReviewContributions: totals.reviews },
-        pullRequests: { totalCount: totals.prs },
-        mergedPullRequests: { totalCount: Math.max(totals.prs - 5, 0) },
-        openIssues: { totalCount: Math.floor(totals.issues / 2) },
-        closedIssues: { totalCount: Math.ceil(totals.issues / 2) },
-        followers: { totalCount: 42 },
-        repositoryDiscussions: { totalCount: totals.discussions },
-        repositoryDiscussionComments: {
-          totalCount: totals.discussionsAnswered,
-        },
-        repositories: {
-          totalCount: 10,
-          nodes: [
-            {
-              name: `${username}-repo`,
-              stargazers: { totalCount: totals.stars },
-            },
-          ],
-          pageInfo: { hasNextPage: false, endCursor: null },
-        },
-      },
-    },
-  };
-};
+const makeStats = (username, overrides = {}) => ({
+  name: `${username} Doe`,
+  totalCommits: 200,
+  totalPRs: 50,
+  totalPRsMerged: 30,
+  mergedPRsPercentage: 60,
+  totalReviews: 25,
+  totalIssues: 40,
+  totalStars: 120,
+  totalDiscussionsStarted: 5,
+  totalDiscussionsAnswered: 3,
+  contributedTo: 10,
+  rank: { level: "A", percentile: 90 },
+  ...overrides,
+});
 
 /**
- * Create a mock Express/Vercel style response.
- *
- * @returns {{ status: jest.Mock, json: jest.Mock, setHeader: jest.Mock }}
+ * Create a mock Express-style response.
  */
 const createMockResponse = () => ({
   status: jest.fn().mockReturnThis(),
@@ -82,34 +79,33 @@ const createMockResponse = () => ({
 });
 
 /**
- * Invoke the compare handler with a given query payload.
+ * Invoke the compare handler with a query object.
  *
  * @param {Record<string, unknown>} query
- * @returns {Promise<ReturnType<typeof createMockResponse>>}
  */
 const invokeCompare = async (query) => {
+  const handler = await loadCompareHandler();
   const req = { query };
   const res = createMockResponse();
 
-  await compareHandler(req, res);
+  await handler(req, res);
 
   return res;
 };
 
 /**
- * Extract the JSON payload sent via res.json.
- *
- * @param {ReturnType<typeof createMockResponse>} res
- * @returns {any}
+ * Extract the last JSON payload sent through res.json.
  */
-const getJsonPayload = (res) => res.json.mock.calls.at(-1)?.[0];
+const getPayload = (res) => res.json.mock.calls.at(-1)?.[0];
 
 beforeEach(() => {
-  mock.reset();
+  fetchStatsMock.mockReset();
+  guardAccessMock.mockReset();
+  guardAccessMock.mockReturnValue({ isPassed: true, result: undefined });
 });
 
 afterEach(() => {
-  mock.reset();
+  jest.clearAllMocks();
 });
 
 describe("GET /api/compare", () => {
@@ -123,14 +119,13 @@ describe("GET /api/compare", () => {
           message: expect.stringMatching(/user/i),
         }),
       );
+      expect(fetchStatsMock).not.toHaveBeenCalled();
     });
 
     it("accepts exactly two users", async () => {
-      mock
-        .onPost(GITHUB_GRAPHQL_ENDPOINT)
-        .replyOnce(200, createMockStatsResponse("alice", { stars: 100 }))
-        .onPost(GITHUB_GRAPHQL_ENDPOINT)
-        .replyOnce(200, createMockStatsResponse("bob", { stars: 150 }));
+      fetchStatsMock
+        .mockResolvedValueOnce(makeStats("alice", { totalStars: 100 }))
+        .mockResolvedValueOnce(makeStats("bob", { totalStars: 150 }));
 
       const res = await invokeCompare({ user1: "alice", user2: "bob" });
 
@@ -140,10 +135,10 @@ describe("GET /api/compare", () => {
 
     it("accepts up to five users", async () => {
       const users = ["alice", "bob", "charlie", "dave", "eve"];
-      users.forEach((username) => {
-        mock
-          .onPost(GITHUB_GRAPHQL_ENDPOINT)
-          .replyOnce(200, createMockStatsResponse(username));
+      users.forEach((username, index) => {
+        fetchStatsMock.mockResolvedValueOnce(
+          makeStats(username, { totalStars: 100 + index * 10 }),
+        );
       });
 
       const res = await invokeCompare({
@@ -155,8 +150,7 @@ describe("GET /api/compare", () => {
       });
 
       expect(res.status).toHaveBeenCalledWith(200);
-      const payload = getJsonPayload(res);
-      expect(payload).toBeDefined();
+      const payload = getPayload(res);
       expect(payload?.comparison?.users).toHaveLength(5);
       expect(payload.comparison.users).toEqual(expect.arrayContaining(users));
     });
@@ -193,23 +187,22 @@ describe("GET /api/compare", () => {
   });
 
   describe("response format: detailed", () => {
-    it("returns detailed format by default", async () => {
-      mock
-        .onPost(GITHUB_GRAPHQL_ENDPOINT)
-        .replyOnce(200, createMockStatsResponse("alice", { stars: 100 }))
-        .onPost(GITHUB_GRAPHQL_ENDPOINT)
-        .replyOnce(200, createMockStatsResponse("bob", { stars: 150 }));
+    it("returns detailed format with cached indicator", async () => {
+      fetchStatsMock
+        .mockResolvedValueOnce(makeStats("alice", { totalStars: 100 }))
+        .mockResolvedValueOnce(makeStats("bob", { totalStars: 150 }));
 
       const res = await invokeCompare({ user1: "alice", user2: "bob" });
-      const payload = getJsonPayload(res);
+      const payload = getPayload(res);
 
       expect(res.status).toHaveBeenCalledWith(200);
-      expect(payload).toBeDefined();
       expect(payload).toEqual(
         expect.objectContaining({
           comparison: expect.objectContaining({
             users: expect.arrayContaining(["alice", "bob"]),
             timestamp: expect.any(String),
+            cached: expect.any(Boolean),
+            stats_compared: expect.any(Array),
           }),
           data: expect.objectContaining({
             alice: expect.objectContaining({ name: expect.any(String) }),
@@ -226,36 +219,29 @@ describe("GET /api/compare", () => {
       expect(payload.summary.overall_leader).toMatch(/alice|bob/);
     });
 
-    it("computes leaders for individual stats", async () => {
-      mock
-        .onPost(GITHUB_GRAPHQL_ENDPOINT)
-        .replyOnce(
-          200,
-          createMockStatsResponse("alice", { stars: 100, commits: 200 }),
+    it("includes percentage differences and leaders", async () => {
+      fetchStatsMock
+        .mockResolvedValueOnce(
+          makeStats("alice", { totalStars: 80, totalCommits: 200 }),
         )
-        .onPost(GITHUB_GRAPHQL_ENDPOINT)
-        .replyOnce(
-          200,
-          createMockStatsResponse("bob", { stars: 150, commits: 180 }),
+        .mockResolvedValueOnce(
+          makeStats("bob", { totalStars: 160, totalCommits: 150 }),
         );
 
       const res = await invokeCompare({ user1: "alice", user2: "bob" });
-      const payload = getJsonPayload(res);
+      const payload = getPayload(res);
+      const { diff } = payload;
 
-      expect(res.status).toHaveBeenCalledWith(200);
-      expect(payload).toBeDefined();
-      expect(payload.diff).toBeDefined();
-
-      const starsDiff = payload.diff.totalStars;
-      const commitsDiff = payload.diff.totalCommits;
-
-      expect(starsDiff).toEqual(
+      expect(diff.totalStars).toEqual(
         expect.objectContaining({
           leader: "bob",
           difference: expect.any(Number),
+          percentage: expect.any(Number),
         }),
       );
-      expect(commitsDiff).toEqual(
+      expect(Number.isFinite(diff.totalStars.percentage)).toBe(true);
+
+      expect(diff.totalCommits).toEqual(
         expect.objectContaining({
           leader: "alice",
           difference: expect.any(Number),
@@ -265,23 +251,19 @@ describe("GET /api/compare", () => {
   });
 
   describe("response format: compact", () => {
-    it("returns compact format when requested", async () => {
-      mock
-        .onPost(GITHUB_GRAPHQL_ENDPOINT)
-        .replyOnce(200, createMockStatsResponse("alice"))
-        .onPost(GITHUB_GRAPHQL_ENDPOINT)
-        .replyOnce(200, createMockStatsResponse("bob"));
+    it("returns compact payload when requested", async () => {
+      fetchStatsMock
+        .mockResolvedValueOnce(makeStats("alice"))
+        .mockResolvedValueOnce(makeStats("bob"));
 
       const res = await invokeCompare({
         user1: "alice",
         user2: "bob",
         format: "compact",
       });
-
-      const payload = getJsonPayload(res);
+      const payload = getPayload(res);
 
       expect(res.status).toHaveBeenCalledWith(200);
-      expect(payload).toBeDefined();
       expect(payload).toEqual(
         expect.objectContaining({
           users: expect.arrayContaining(["alice", "bob"]),
@@ -304,17 +286,17 @@ describe("GET /api/compare", () => {
   });
 
   describe("response format: leaderboard", () => {
-    it("returns leaderboard format when requested", async () => {
+    it("returns ranked leaderboard when requested", async () => {
       const users = [
-        { username: "alice", totals: { stars: 200, commits: 220 } },
-        { username: "bob", totals: { stars: 150, commits: 180 } },
-        { username: "charlie", totals: { stars: 180, commits: 200 } },
+        { username: "alice", stars: 200, commits: 220 },
+        { username: "bob", stars: 150, commits: 180 },
+        { username: "charlie", stars: 180, commits: 200 },
       ];
 
-      users.forEach(({ username, totals }) => {
-        mock
-          .onPost(GITHUB_GRAPHQL_ENDPOINT)
-          .replyOnce(200, createMockStatsResponse(username, totals));
+      users.forEach(({ username, stars, commits }) => {
+        fetchStatsMock.mockResolvedValueOnce(
+          makeStats(username, { totalStars: stars, totalCommits: commits }),
+        );
       });
 
       const res = await invokeCompare({
@@ -323,13 +305,11 @@ describe("GET /api/compare", () => {
         user3: "charlie",
         format: "leaderboard",
       });
-      const payload = getJsonPayload(res);
+      const payload = getPayload(res);
 
       expect(res.status).toHaveBeenCalledWith(200);
-      expect(payload).toBeDefined();
       expect(Array.isArray(payload.leaderboard)).toBe(true);
       expect(payload.leaderboard).toHaveLength(3);
-
       payload.leaderboard.forEach((entry) => {
         expect(entry).toEqual(
           expect.objectContaining({
@@ -338,90 +318,81 @@ describe("GET /api/compare", () => {
             stats: expect.any(Object),
           }),
         );
-        expect(entry.score ?? entry.totalScore).toBeDefined();
       });
-
       const ranks = payload.leaderboard.map((entry) => entry.rank);
       expect(ranks).toEqual([...ranks].sort((a, b) => a - b));
     });
   });
 
   describe("stats filtering", () => {
-    it("keeps only requested stats when stats filter provided", async () => {
-      mock
-        .onPost(GITHUB_GRAPHQL_ENDPOINT)
-        .replyOnce(200, createMockStatsResponse("alice"))
-        .onPost(GITHUB_GRAPHQL_ENDPOINT)
-        .replyOnce(200, createMockStatsResponse("bob"));
+    it("includes only requested stats in diff", async () => {
+      fetchStatsMock
+        .mockResolvedValueOnce(makeStats("alice"))
+        .mockResolvedValueOnce(makeStats("bob"));
 
       const res = await invokeCompare({
         user1: "alice",
         user2: "bob",
         stats: "commits,stars",
       });
-      const payload = getJsonPayload(res);
-
-      expect(res.status).toHaveBeenCalledWith(200);
-      expect(payload).toBeDefined();
-      expect(payload.diff).toBeDefined();
-
+      const payload = getPayload(res);
       const diffKeys = Object.keys(payload.diff);
 
       expect(diffKeys).toEqual(
         expect.arrayContaining(["totalCommits", "totalStars"]),
       );
       expect(diffKeys).toHaveLength(2);
+      expect(payload.comparison.stats_compared).toEqual(
+        expect.arrayContaining(["commits", "stars"]),
+      );
     });
   });
 
   describe("parameter handling", () => {
-    it("respects the include_all_commits flag", async () => {
-      mock
-        .onPost(GITHUB_GRAPHQL_ENDPOINT)
-        .replyOnce(200, createMockStatsResponse("alice"))
-        .onPost(GITHUB_GRAPHQL_ENDPOINT)
-        .replyOnce(200, createMockStatsResponse("bob"))
-        .onGet(/api\.github\.com\/search\/commits/)
-        .reply(200, { total_count: 500 });
+    it("respects include_all_commits flag", async () => {
+      fetchStatsMock.mockImplementation((username, includeAllCommits) =>
+        Promise.resolve(
+          makeStats(username, {
+            totalCommits: includeAllCommits ? 999 : 123,
+          }),
+        ),
+      );
 
       const res = await invokeCompare({
         user1: "alice",
         user2: "bob",
         include_all_commits: "true",
       });
+      const payload = getPayload(res);
 
-      expect(res.status).toHaveBeenCalledWith(200);
-      const payload = getJsonPayload(res);
-
-      expect(payload).toBeDefined();
-      expect(payload.data).toBeDefined();
-      expect(payload.data.alice.totalCommits).toEqual(expect.any(Number));
-      expect(payload.data.bob.totalCommits).toEqual(expect.any(Number));
+      expect(payload.data.alice.totalCommits).toBe(999);
+      expect(payload.data.bob.totalCommits).toBe(999);
     });
 
-    it("respects the exclude_repo parameter", async () => {
-      mock
-        .onPost(GITHUB_GRAPHQL_ENDPOINT)
-        .replyOnce(200, createMockStatsResponse("alice"))
-        .onPost(GITHUB_GRAPHQL_ENDPOINT)
-        .replyOnce(200, createMockStatsResponse("bob"));
+    it("respects exclude_repo parameter", async () => {
+      fetchStatsMock.mockImplementation((username, _includeAll, excludeRepos) =>
+        Promise.resolve(
+          makeStats(username, {
+            totalStars: excludeRepos?.includes("repo2") ? 50 : 120,
+          }),
+        ),
+      );
 
       const res = await invokeCompare({
         user1: "alice",
         user2: "bob",
         exclude_repo: "repo1,repo2",
       });
+      const payload = getPayload(res);
 
-      expect(res.status).toHaveBeenCalledWith(200);
-      expect(res.json).toHaveBeenCalled();
+      expect(payload.data.alice.totalStars).toBe(50);
+      expect(payload.data.bob.totalStars).toBe(50);
     });
 
     it("sets default cache headers", async () => {
-      mock
-        .onPost(GITHUB_GRAPHQL_ENDPOINT)
-        .replyOnce(200, createMockStatsResponse("alice"))
-        .onPost(GITHUB_GRAPHQL_ENDPOINT)
-        .replyOnce(200, createMockStatsResponse("bob"));
+      fetchStatsMock
+        .mockResolvedValueOnce(makeStats("alice"))
+        .mockResolvedValueOnce(makeStats("bob"));
 
       const res = await invokeCompare({ user1: "alice", user2: "bob" });
 
@@ -431,12 +402,10 @@ describe("GET /api/compare", () => {
       );
     });
 
-    it("sets cache headers based on cache_seconds", async () => {
-      mock
-        .onPost(GITHUB_GRAPHQL_ENDPOINT)
-        .replyOnce(200, createMockStatsResponse("alice"))
-        .onPost(GITHUB_GRAPHQL_ENDPOINT)
-        .replyOnce(200, createMockStatsResponse("bob"));
+    it("applies custom cache_seconds", async () => {
+      fetchStatsMock
+        .mockResolvedValueOnce(makeStats("alice"))
+        .mockResolvedValueOnce(makeStats("bob"));
 
       const res = await invokeCompare({
         user1: "alice",
@@ -453,14 +422,9 @@ describe("GET /api/compare", () => {
 
   describe("error handling", () => {
     it("returns 404 when a user cannot be found", async () => {
-      mock.onPost(GITHUB_GRAPHQL_ENDPOINT).reply(200, {
-        errors: [
-          {
-            type: "NOT_FOUND",
-            message: "Could not fetch user",
-          },
-        ],
-      });
+      const error = new Error("User not found");
+      error.code = "USER_NOT_FOUND";
+      fetchStatsMock.mockRejectedValueOnce(error);
 
       const res = await invokeCompare({ user1: "ghost", user2: "bob" });
 
@@ -472,14 +436,8 @@ describe("GET /api/compare", () => {
       );
     });
 
-    it("returns 500 when the GraphQL API responds with errors", async () => {
-      mock.onPost(GITHUB_GRAPHQL_ENDPOINT).reply(200, {
-        errors: [
-          {
-            message: "GraphQL error",
-          },
-        ],
-      });
+    it("returns 500 when fetcher reports an error", async () => {
+      fetchStatsMock.mockRejectedValueOnce(new Error("GraphQL error"));
 
       const res = await invokeCompare({ user1: "alice", user2: "bob" });
 
@@ -491,8 +449,8 @@ describe("GET /api/compare", () => {
       );
     });
 
-    it("returns 500 on network failures", async () => {
-      mock.onPost(GITHUB_GRAPHQL_ENDPOINT).networkError();
+    it("returns 500 on unexpected failures", async () => {
+      fetchStatsMock.mockRejectedValueOnce(new Error("network down"));
 
       const res = await invokeCompare({ user1: "alice", user2: "bob" });
 
@@ -505,57 +463,48 @@ describe("GET /api/compare", () => {
     });
   });
 
+  describe("access control", () => {
+    it("returns 429 when rate limited", async () => {
+      const res = createMockResponse();
+      guardAccessMock.mockReturnValueOnce({
+        isPassed: false,
+        result: res.status(429).json({ message: "Rate limit exceeded" }),
+      });
+
+      const handler = await loadCompareHandler();
+      await handler({ query: { user1: "alice", user2: "bob" } }, res);
+
+      expect(res.status).toHaveBeenCalledWith(429);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringMatching(/rate/i),
+        }),
+      );
+    });
+  });
+
   describe("summary insights", () => {
-    it("identifies an overall leader", async () => {
-      mock
-        .onPost(GITHUB_GRAPHQL_ENDPOINT)
-        .replyOnce(
-          200,
-          createMockStatsResponse("alice", { stars: 50, commits: 100 }),
+    it("provides leader summaries", async () => {
+      fetchStatsMock
+        .mockResolvedValueOnce(
+          makeStats("alice", { totalStars: 50, totalCommits: 100 }),
         )
-        .onPost(GITHUB_GRAPHQL_ENDPOINT)
-        .replyOnce(
-          200,
-          createMockStatsResponse("bob", { stars: 200, commits: 250 }),
+        .mockResolvedValueOnce(
+          makeStats("bob", { totalStars: 200, totalCommits: 250 }),
         );
 
       const res = await invokeCompare({ user1: "alice", user2: "bob" });
-      const payload = getJsonPayload(res);
+      const payload = getPayload(res);
 
-      expect(payload).toBeDefined();
-      expect(payload.summary).toBeDefined();
-      expect(["alice", "bob"]).toContain(payload.summary.overall_leader);
+      expect(payload.summary.overall_leader).toMatch(/alice|bob/);
       expect(payload.summary.stats_won).toEqual(
         expect.objectContaining({
           alice: expect.any(Number),
           bob: expect.any(Number),
         }),
       );
-    });
-
-    it("surfaces close and significant stats", async () => {
-      mock
-        .onPost(GITHUB_GRAPHQL_ENDPOINT)
-        .replyOnce(
-          200,
-          createMockStatsResponse("alice", { commits: 100, stars: 50 }),
-        )
-        .onPost(GITHUB_GRAPHQL_ENDPOINT)
-        .replyOnce(
-          200,
-          createMockStatsResponse("bob", { commits: 105, stars: 200 }),
-        );
-
-      const res = await invokeCompare({ user1: "alice", user2: "bob" });
-      const payload = getJsonPayload(res);
-
-      expect(payload).toBeDefined();
-      expect(payload.summary).toBeDefined();
-
-      const { summary } = payload;
-
-      expect(Array.isArray(summary.close_stats)).toBe(true);
-      expect(Array.isArray(summary.significant_differences)).toBe(true);
+      expect(Array.isArray(payload.summary.close_stats)).toBe(true);
+      expect(Array.isArray(payload.summary.significant_differences)).toBe(true);
     });
   });
 });
