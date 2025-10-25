@@ -1,0 +1,590 @@
+diff --git a/test.sh b/test.sh
+new file mode 100755
+index 0000000..6c88082
+--- /dev/null
++++ b/test.sh
+@@ -0,0 +1,17 @@
++#!/bin/bash
++set -e
++
++case "$1" in
++  base)
++    # Run existing tests - should pass at base commit
++    npm test -- tests/api.test.js
++    ;;
++  new)
++    # Run newly added tests - should fail before solution
++    npm test -- tests/api-compare.test.js
++    ;;
++  *)
++    echo "Usage: ./test.sh {base|new}"
++    exit 1
++    ;;
++esac
+diff --git a/tests/api-compare.test.js b/tests/api-compare.test.js
+new file mode 100644
+index 0000000..55d25ad
+--- /dev/null
++++ b/tests/api-compare.test.js
+@@ -0,0 +1,561 @@
++// @ts-check
++
++if (!process.env.PAT_1) {
++  process.env.PAT_1 = "test_pat_token";
++}
++
++import {
++  afterEach,
++  beforeEach,
++  describe,
++  expect,
++  it,
++  jest,
++} from "@jest/globals";
++import axios from "axios";
++import MockAdapter from "axios-mock-adapter";
++import compareHandler from "../api/compare.js";
++
++const mock = new MockAdapter(axios);
++const GITHUB_GRAPHQL_ENDPOINT = "https://api.github.com/graphql";
++const DEFAULT_USER_TOTALS = {
++  stars: 100,
++  commits: 200,
++  prs: 50,
++  issues: 30,
++  reviews: 20,
++  discussions: 5,
++  discussionsAnswered: 10,
++};
++
++/**
++ * Create a mock GitHub GraphQL response for a given username.
++ *
++ * @param {string} username
++ * @param {Partial<typeof DEFAULT_USER_TOTALS>} [overrides]
++ * @returns {Record<string, unknown>}
++ */
++const createMockStatsResponse = (username, overrides = {}) => {
++  const totals = { ...DEFAULT_USER_TOTALS, ...overrides };
++
++  return {
++    data: {
++      user: {
++        name: `${username} Doe`,
++        login: username,
++        repositoriesContributedTo: { totalCount: 10 },
++        commits: { totalCommitContributions: totals.commits },
++        reviews: { totalPullRequestReviewContributions: totals.reviews },
++        pullRequests: { totalCount: totals.prs },
++        mergedPullRequests: { totalCount: Math.max(totals.prs - 5, 0) },
++        openIssues: { totalCount: Math.floor(totals.issues / 2) },
++        closedIssues: { totalCount: Math.ceil(totals.issues / 2) },
++        followers: { totalCount: 42 },
++        repositoryDiscussions: { totalCount: totals.discussions },
++        repositoryDiscussionComments: {
++          totalCount: totals.discussionsAnswered,
++        },
++        repositories: {
++          totalCount: 10,
++          nodes: [
++            {
++              name: `${username}-repo`,
++              stargazers: { totalCount: totals.stars },
++            },
++          ],
++          pageInfo: { hasNextPage: false, endCursor: null },
++        },
++      },
++    },
++  };
++};
++
++/**
++ * Create a mock Express/Vercel style response.
++ *
++ * @returns {{ status: jest.Mock, json: jest.Mock, setHeader: jest.Mock }}
++ */
++const createMockResponse = () => ({
++  status: jest.fn().mockReturnThis(),
++  json: jest.fn(),
++  setHeader: jest.fn(),
++});
++
++/**
++ * Invoke the compare handler with a given query payload.
++ *
++ * @param {Record<string, unknown>} query
++ * @returns {Promise<ReturnType<typeof createMockResponse>>}
++ */
++const invokeCompare = async (query) => {
++  const req = { query };
++  const res = createMockResponse();
++
++  await compareHandler(req, res);
++
++  return res;
++};
++
++/**
++ * Extract the JSON payload sent via res.json.
++ *
++ * @param {ReturnType<typeof createMockResponse>} res
++ * @returns {any}
++ */
++const getJsonPayload = (res) => res.json.mock.calls.at(-1)?.[0];
++
++beforeEach(() => {
++  mock.reset();
++});
++
++afterEach(() => {
++  mock.reset();
++});
++
++describe("GET /api/compare", () => {
++  describe("parameter validation", () => {
++    it("returns 400 when fewer than two users are provided", async () => {
++      const res = await invokeCompare({});
++
++      expect(res.status).toHaveBeenCalledWith(400);
++      expect(res.json).toHaveBeenCalledWith(
++        expect.objectContaining({
++          message: expect.stringMatching(/user/i),
++        }),
++      );
++    });
++
++    it("accepts exactly two users", async () => {
++      mock
++        .onPost(GITHUB_GRAPHQL_ENDPOINT)
++        .replyOnce(200, createMockStatsResponse("alice", { stars: 100 }))
++        .onPost(GITHUB_GRAPHQL_ENDPOINT)
++        .replyOnce(200, createMockStatsResponse("bob", { stars: 150 }));
++
++      const res = await invokeCompare({ user1: "alice", user2: "bob" });
++
++      expect(res.status).toHaveBeenCalledWith(200);
++      expect(res.json).toHaveBeenCalled();
++    });
++
++    it("accepts up to five users", async () => {
++      const users = ["alice", "bob", "charlie", "dave", "eve"];
++      users.forEach((username) => {
++        mock
++          .onPost(GITHUB_GRAPHQL_ENDPOINT)
++          .replyOnce(200, createMockStatsResponse(username));
++      });
++
++      const res = await invokeCompare({
++        user1: users[0],
++        user2: users[1],
++        user3: users[2],
++        user4: users[3],
++        user5: users[4],
++      });
++
++      expect(res.status).toHaveBeenCalledWith(200);
++      const payload = getJsonPayload(res);
++      expect(payload).toBeDefined();
++      expect(payload?.comparison?.users).toHaveLength(5);
++      expect(payload.comparison.users).toEqual(expect.arrayContaining(users));
++    });
++
++    it("rejects unsupported formats", async () => {
++      const res = await invokeCompare({
++        user1: "alice",
++        user2: "bob",
++        format: "markdown",
++      });
++
++      expect(res.status).toHaveBeenCalledWith(400);
++      expect(res.json).toHaveBeenCalledWith(
++        expect.objectContaining({
++          message: expect.stringMatching(/format/i),
++        }),
++      );
++    });
++
++    it("rejects unsupported stats filters", async () => {
++      const res = await invokeCompare({
++        user1: "alice",
++        user2: "bob",
++        stats: "commits,invalid",
++      });
++
++      expect(res.status).toHaveBeenCalledWith(400);
++      expect(res.json).toHaveBeenCalledWith(
++        expect.objectContaining({
++          message: expect.stringMatching(/stats/i),
++        }),
++      );
++    });
++  });
++
++  describe("response format: detailed", () => {
++    it("returns detailed format by default", async () => {
++      mock
++        .onPost(GITHUB_GRAPHQL_ENDPOINT)
++        .replyOnce(200, createMockStatsResponse("alice", { stars: 100 }))
++        .onPost(GITHUB_GRAPHQL_ENDPOINT)
++        .replyOnce(200, createMockStatsResponse("bob", { stars: 150 }));
++
++      const res = await invokeCompare({ user1: "alice", user2: "bob" });
++      const payload = getJsonPayload(res);
++
++      expect(res.status).toHaveBeenCalledWith(200);
++      expect(payload).toBeDefined();
++      expect(payload).toEqual(
++        expect.objectContaining({
++          comparison: expect.objectContaining({
++            users: expect.arrayContaining(["alice", "bob"]),
++            timestamp: expect.any(String),
++          }),
++          data: expect.objectContaining({
++            alice: expect.objectContaining({ name: expect.any(String) }),
++            bob: expect.objectContaining({ name: expect.any(String) }),
++          }),
++          diff: expect.any(Object),
++          summary: expect.any(Object),
++        }),
++      );
++
++      expect(new Date(payload.comparison.timestamp).toString()).not.toBe(
++        "Invalid Date",
++      );
++      expect(payload.summary.overall_leader).toMatch(/alice|bob/);
++    });
++
++    it("computes leaders for individual stats", async () => {
++      mock
++        .onPost(GITHUB_GRAPHQL_ENDPOINT)
++        .replyOnce(
++          200,
++          createMockStatsResponse("alice", { stars: 100, commits: 200 }),
++        )
++        .onPost(GITHUB_GRAPHQL_ENDPOINT)
++        .replyOnce(
++          200,
++          createMockStatsResponse("bob", { stars: 150, commits: 180 }),
++        );
++
++      const res = await invokeCompare({ user1: "alice", user2: "bob" });
++      const payload = getJsonPayload(res);
++
++      expect(res.status).toHaveBeenCalledWith(200);
++      expect(payload).toBeDefined();
++      expect(payload.diff).toBeDefined();
++
++      const starsDiff = payload.diff.totalStars;
++      const commitsDiff = payload.diff.totalCommits;
++
++      expect(starsDiff).toEqual(
++        expect.objectContaining({
++          leader: "bob",
++          difference: expect.any(Number),
++        }),
++      );
++      expect(commitsDiff).toEqual(
++        expect.objectContaining({
++          leader: "alice",
++          difference: expect.any(Number),
++        }),
++      );
++    });
++  });
++
++  describe("response format: compact", () => {
++    it("returns compact format when requested", async () => {
++      mock
++        .onPost(GITHUB_GRAPHQL_ENDPOINT)
++        .replyOnce(200, createMockStatsResponse("alice"))
++        .onPost(GITHUB_GRAPHQL_ENDPOINT)
++        .replyOnce(200, createMockStatsResponse("bob"));
++
++      const res = await invokeCompare({
++        user1: "alice",
++        user2: "bob",
++        format: "compact",
++      });
++
++      const payload = getJsonPayload(res);
++
++      expect(res.status).toHaveBeenCalledWith(200);
++      expect(payload).toBeDefined();
++      expect(payload).toEqual(
++        expect.objectContaining({
++          users: expect.arrayContaining(["alice", "bob"]),
++          timestamp: expect.any(String),
++          diff: expect.any(Object),
++          leader: expect.any(String),
++        }),
++      );
++      expect(payload).not.toHaveProperty("comparison");
++      expect(payload).not.toHaveProperty("summary");
++      Object.values(payload.diff).forEach((entry) => {
++        expect(entry).toEqual(
++          expect.objectContaining({
++            delta: expect.any(Number),
++            leader: expect.any(String),
++          }),
++        );
++      });
++    });
++  });
++
++  describe("response format: leaderboard", () => {
++    it("returns leaderboard format when requested", async () => {
++      const users = [
++        { username: "alice", totals: { stars: 200, commits: 220 } },
++        { username: "bob", totals: { stars: 150, commits: 180 } },
++        { username: "charlie", totals: { stars: 180, commits: 200 } },
++      ];
++
++      users.forEach(({ username, totals }) => {
++        mock
++          .onPost(GITHUB_GRAPHQL_ENDPOINT)
++          .replyOnce(200, createMockStatsResponse(username, totals));
++      });
++
++      const res = await invokeCompare({
++        user1: "alice",
++        user2: "bob",
++        user3: "charlie",
++        format: "leaderboard",
++      });
++      const payload = getJsonPayload(res);
++
++      expect(res.status).toHaveBeenCalledWith(200);
++      expect(payload).toBeDefined();
++      expect(Array.isArray(payload.leaderboard)).toBe(true);
++      expect(payload.leaderboard).toHaveLength(3);
++
++      payload.leaderboard.forEach((entry) => {
++        expect(entry).toEqual(
++          expect.objectContaining({
++            rank: expect.any(Number),
++            username: expect.any(String),
++            stats: expect.any(Object),
++          }),
++        );
++        expect(entry.score ?? entry.totalScore).toBeDefined();
++      });
++
++      const ranks = payload.leaderboard.map((entry) => entry.rank);
++      expect(ranks).toEqual([...ranks].sort((a, b) => a - b));
++    });
++  });
++
++  describe("stats filtering", () => {
++    it("keeps only requested stats when stats filter provided", async () => {
++      mock
++        .onPost(GITHUB_GRAPHQL_ENDPOINT)
++        .replyOnce(200, createMockStatsResponse("alice"))
++        .onPost(GITHUB_GRAPHQL_ENDPOINT)
++        .replyOnce(200, createMockStatsResponse("bob"));
++
++      const res = await invokeCompare({
++        user1: "alice",
++        user2: "bob",
++        stats: "commits,stars",
++      });
++      const payload = getJsonPayload(res);
++
++      expect(res.status).toHaveBeenCalledWith(200);
++      expect(payload).toBeDefined();
++      expect(payload.diff).toBeDefined();
++
++      const diffKeys = Object.keys(payload.diff);
++
++      expect(diffKeys).toEqual(
++        expect.arrayContaining(["totalCommits", "totalStars"]),
++      );
++      expect(diffKeys).toHaveLength(2);
++    });
++  });
++
++  describe("parameter handling", () => {
++    it("respects the include_all_commits flag", async () => {
++      mock
++        .onPost(GITHUB_GRAPHQL_ENDPOINT)
++        .replyOnce(200, createMockStatsResponse("alice"))
++        .onPost(GITHUB_GRAPHQL_ENDPOINT)
++        .replyOnce(200, createMockStatsResponse("bob"))
++        .onGet(/api\.github\.com\/search\/commits/)
++        .reply(200, { total_count: 500 });
++
++      const res = await invokeCompare({
++        user1: "alice",
++        user2: "bob",
++        include_all_commits: "true",
++      });
++
++      expect(res.status).toHaveBeenCalledWith(200);
++      const payload = getJsonPayload(res);
++
++      expect(payload).toBeDefined();
++      expect(payload.data).toBeDefined();
++      expect(payload.data.alice.totalCommits).toEqual(expect.any(Number));
++      expect(payload.data.bob.totalCommits).toEqual(expect.any(Number));
++    });
++
++    it("respects the exclude_repo parameter", async () => {
++      mock
++        .onPost(GITHUB_GRAPHQL_ENDPOINT)
++        .replyOnce(200, createMockStatsResponse("alice"))
++        .onPost(GITHUB_GRAPHQL_ENDPOINT)
++        .replyOnce(200, createMockStatsResponse("bob"));
++
++      const res = await invokeCompare({
++        user1: "alice",
++        user2: "bob",
++        exclude_repo: "repo1,repo2",
++      });
++
++      expect(res.status).toHaveBeenCalledWith(200);
++      expect(res.json).toHaveBeenCalled();
++    });
++
++    it("sets default cache headers", async () => {
++      mock
++        .onPost(GITHUB_GRAPHQL_ENDPOINT)
++        .replyOnce(200, createMockStatsResponse("alice"))
++        .onPost(GITHUB_GRAPHQL_ENDPOINT)
++        .replyOnce(200, createMockStatsResponse("bob"));
++
++      const res = await invokeCompare({ user1: "alice", user2: "bob" });
++
++      expect(res.setHeader).toHaveBeenCalledWith(
++        "Cache-Control",
++        expect.stringMatching(/max-age/),
++      );
++    });
++
++    it("sets cache headers based on cache_seconds", async () => {
++      mock
++        .onPost(GITHUB_GRAPHQL_ENDPOINT)
++        .replyOnce(200, createMockStatsResponse("alice"))
++        .onPost(GITHUB_GRAPHQL_ENDPOINT)
++        .replyOnce(200, createMockStatsResponse("bob"));
++
++      const res = await invokeCompare({
++        user1: "alice",
++        user2: "bob",
++        cache_seconds: "7200",
++      });
++
++      expect(res.setHeader).toHaveBeenCalledWith(
++        "Cache-Control",
++        expect.stringMatching(/7200/),
++      );
++    });
++  });
++
++  describe("error handling", () => {
++    it("returns 404 when a user cannot be found", async () => {
++      mock.onPost(GITHUB_GRAPHQL_ENDPOINT).reply(200, {
++        errors: [
++          {
++            type: "NOT_FOUND",
++            message: "Could not fetch user",
++          },
++        ],
++      });
++
++      const res = await invokeCompare({ user1: "ghost", user2: "bob" });
++
++      expect(res.status).toHaveBeenCalledWith(404);
++      expect(res.json).toHaveBeenCalledWith(
++        expect.objectContaining({
++          message: expect.stringMatching(/not found/i),
++        }),
++      );
++    });
++
++    it("returns 500 when the GraphQL API responds with errors", async () => {
++      mock.onPost(GITHUB_GRAPHQL_ENDPOINT).reply(200, {
++        errors: [
++          {
++            message: "GraphQL error",
++          },
++        ],
++      });
++
++      const res = await invokeCompare({ user1: "alice", user2: "bob" });
++
++      expect(res.status).toHaveBeenCalledWith(500);
++      expect(res.json).toHaveBeenCalledWith(
++        expect.objectContaining({
++          message: expect.stringMatching(/error/i),
++        }),
++      );
++    });
++
++    it("returns 500 on network failures", async () => {
++      mock.onPost(GITHUB_GRAPHQL_ENDPOINT).networkError();
++
++      const res = await invokeCompare({ user1: "alice", user2: "bob" });
++
++      expect(res.status).toHaveBeenCalledWith(500);
++      expect(res.json).toHaveBeenCalledWith(
++        expect.objectContaining({
++          message: expect.stringMatching(/error/i),
++        }),
++      );
++    });
++  });
++
++  describe("summary insights", () => {
++    it("identifies an overall leader", async () => {
++      mock
++        .onPost(GITHUB_GRAPHQL_ENDPOINT)
++        .replyOnce(
++          200,
++          createMockStatsResponse("alice", { stars: 50, commits: 100 }),
++        )
++        .onPost(GITHUB_GRAPHQL_ENDPOINT)
++        .replyOnce(
++          200,
++          createMockStatsResponse("bob", { stars: 200, commits: 250 }),
++        );
++
++      const res = await invokeCompare({ user1: "alice", user2: "bob" });
++      const payload = getJsonPayload(res);
++
++      expect(payload).toBeDefined();
++      expect(payload.summary).toBeDefined();
++      expect(["alice", "bob"]).toContain(payload.summary.overall_leader);
++      expect(payload.summary.stats_won).toEqual(
++        expect.objectContaining({
++          alice: expect.any(Number),
++          bob: expect.any(Number),
++        }),
++      );
++    });
++
++    it("surfaces close and significant stats", async () => {
++      mock
++        .onPost(GITHUB_GRAPHQL_ENDPOINT)
++        .replyOnce(
++          200,
++          createMockStatsResponse("alice", { commits: 100, stars: 50 }),
++        )
++        .onPost(GITHUB_GRAPHQL_ENDPOINT)
++        .replyOnce(
++          200,
++          createMockStatsResponse("bob", { commits: 105, stars: 200 }),
++        );
++
++      const res = await invokeCompare({ user1: "alice", user2: "bob" });
++      const payload = getJsonPayload(res);
++
++      expect(payload).toBeDefined();
++      expect(payload.summary).toBeDefined();
++
++      const { summary } = payload;
++
++      expect(Array.isArray(summary.close_stats)).toBe(true);
++      expect(Array.isArray(summary.significant_differences)).toBe(true);
++    });
++  });
++});
