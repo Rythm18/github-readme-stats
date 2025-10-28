@@ -6,6 +6,48 @@ The test suite validates specific behaviors that are **non-negotiable**. Failing
 
 ---
 
+## 0. 🚨 Validate user count (2-5 users) - REQUIRED
+
+### Why This Matters
+
+The API must compare at least two users and at most five users. The tests enforce:
+- 400 error if fewer than two users are provided
+- 400 error if `user6`, `user7`, etc. are supplied
+
+### How to Implement
+
+```javascript
+const extractUsernames = (query) => {
+  const usernames = [];
+
+  // Reject user6, user7, ...
+  const hasExtraUsers = Object.keys(query).some((key) =>
+    /^user([6-9]|\d{2,})$/.test(key),
+  );
+  if (hasExtraUsers) {
+    throw new Error("Please provide up to 5 users");
+  }
+
+  for (let i = 1; i <= 5; i++) {
+    const value = query[`user${i}`];
+    if (value) usernames.push(value.trim());
+  }
+
+  if (usernames.length < 2) {
+    throw new Error("Please provide at least 2 users (user1 and user2)");
+  }
+
+  return usernames;
+};
+```
+
+### Pitfalls to Avoid
+- ❌ Ignoring `user6` parameters (tests expect 400)
+- ❌ Allowing duplicate or empty usernames without validation
+- ✅ Return clear error messages mentioning "up to 5 users"
+
+---
+
 ## 1. 🚨 MUST Call guardAccess() - REQUIRED
 
 ### Why This Matters
@@ -424,12 +466,17 @@ Before submitting, verify:
 
 - [ ] Handler calls `guardAccess()` as the FIRST operation
 - [ ] Handler returns `access.result` immediately if `!access.isPassed`
+- [ ] Handler validates minimum 2 users and maximum 5 users
+- [ ] Handler rejects user6+ parameters with 400 status
 - [ ] Handler implements `Map`-based caching with cache keys
+- [ ] Cache keys include users, format, include_all_commits, exclude_repo
 - [ ] Cache checks happen BEFORE calling `fetchStats()`
 - [ ] `cached: false` on first request, `cached: true` on second
 - [ ] `fetchStats()` is NOT called on cache hit
+- [ ] Different options (format, include_all_commits, exclude_repo) create distinct cache entries
 - [ ] All three formats include valid ISO-8601 timestamps
 - [ ] Detailed format includes percentage calculations in diff
+- [ ] Summary classifies close stats (<10%) and significant differences (>50%)
 - [ ] Error responses strip tokens and file paths
 - [ ] Parameters (`include_all_commits`, `exclude_repo`) are passed to `fetchStats()`
 

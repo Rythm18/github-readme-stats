@@ -286,6 +286,89 @@ expect(responseString).not.toMatch(/\/internal\/path/);
 
 ---
 
+### 11. Maximum user limit validation [WARNING] ✅ FIXED
+
+**Original Issue:**
+Tests validated minimum of 2 users but not the maximum constraint of 5 users.
+
+**Resolution:**
+- Added test to verify requests with >5 users are rejected with 400 status
+- Updated solution to detect user6, user7, etc. parameters early
+
+**Code Evidence:**
+```javascript
+it("rejects more than five users", async () => {
+  const res = await invokeCompare({
+    user1: "alice", user2: "bob", user3: "charlie",
+    user4: "dave", user5: "eve", user6: "frank",
+  });
+
+  expect(res.status).toHaveBeenCalledWith(400);
+  expect(res.json).toHaveBeenCalledWith(
+    expect.objectContaining({
+      message: expect.stringMatching(/up to 5/i),
+    }),
+  );
+});
+```
+
+---
+
+### 12. Cache key composition validated [WARNING] ✅ FIXED
+
+**Original Issue:**
+Cache tests verified hit/miss but didn't validate that different options create distinct cache entries.
+
+**Resolution:**
+- Added test varying format, include_all_commits, and exclude_repo
+- Verified each variation triggers cache miss and new fetchStats calls
+
+**Code Evidence:**
+```javascript
+it("uses distinct cache entries for different options", async () => {
+  // Request with include_all_commits=true
+  await handler({ query: { user1: "alice", user2: "bob", include_all_commits: "true" } }, ...);
+  
+  fetchStatsMock.mockClear();
+  
+  // Request with format=compact (different cache key)
+  await handler({ query: { user1: "alice", user2: "bob", format: "compact" } }, ...);
+  expect(fetchStatsMock).toHaveBeenCalled(); // New fetch triggered
+  
+  // Request with exclude_repo (different cache key)
+  await handler({ query: { user1: "alice", user2: "bob", exclude_repo: "repo1" } }, ...);
+  expect(fetchStatsMock).toHaveBeenCalled(); // New fetch triggered
+});
+```
+
+---
+
+### 13. Summary threshold behavior validated [WARNING] ✅ FIXED
+
+**Original Issue:**
+Tests checked for presence of close_stats and significant_differences arrays but not the threshold logic.
+
+**Resolution:**
+- Added test with specific percentage differences to verify classification
+- Close stats (<10% difference): 105 vs 100 = 4.7% difference
+- Significant differences (>50%): 300 vs 100 = 66% difference
+
+**Code Evidence:**
+```javascript
+it("classifies close and significant differences based on thresholds", async () => {
+  fetchStatsMock
+    .mockResolvedValueOnce(makeStats("alice", { totalCommits: 100, totalStars: 100 }))
+    .mockResolvedValueOnce(makeStats("bob", { totalCommits: 105, totalStars: 300 }));
+
+  const payload = getPayload(await invokeCompare({ user1: "alice", user2: "bob" }));
+  
+  expect(payload.summary.close_stats).toContain("totalCommits");
+  expect(payload.summary.significant_differences).toContain("totalStars");
+});
+```
+
+---
+
 ## Additional Improvements
 
 Beyond addressing the specific feedback, the following improvements were made:
@@ -325,9 +408,12 @@ The test suite now comprehensively covers:
 ✅ **All HTTP Status Codes**: 200, 400, 401, 403, 404, 429, 500  
 ✅ **Cache Semantics**: First miss (cached: false), subsequent hit (cached: true)  
 ✅ **Access Control**: Rate limiting, blacklist denials, PAT validation  
+✅ **Input Limits**: Validates minimum (2 users) and maximum (5 users) constraints  
+✅ **Cache Keys**: Option permutations (format, include_all_commits, exclude_repo) trigger cache misses  
 ✅ **Parameter Effects**: Observable changes from include_all_commits, exclude_repo, stats filters  
 ✅ **Security**: Sensitive information (tokens, paths) stripped from errors  
 ✅ **Percentage Calculations**: Validated in detailed diff responses  
+✅ **Summary Thresholds**: Close (<10%) vs significant (>50%) differences covered  
 ✅ **Leader Identification**: Verified across all stat metrics  
 
 See `ADDITIONAL_TEST_COVERAGE.md` for detailed documentation of each new test.

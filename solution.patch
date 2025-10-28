@@ -1,9 +1,9 @@
 diff --git a/api/compare.js b/api/compare.js
 new file mode 100644
-index 0000000..00e6cf7
+index 0000000..4ce55d4
 --- /dev/null
 +++ b/api/compare.js
-@@ -0,0 +1,530 @@
+@@ -0,0 +1,542 @@
 +// @ts-check
 +
 +import { createHash } from "crypto";
@@ -24,6 +24,18 @@ index 0000000..00e6cf7
 + */
 +const extractUsernames = (query) => {
 +  const usernames = [];
++
++  // Check for more than 5 users
++  const hasExtraUsers = Object.keys(query).some((key) =>
++    /^user([6-9]|\d{2,})$/.test(key),
++  );
++
++  if (hasExtraUsers) {
++    return {
++      usernames: [],
++      error: "Please provide up to 5 users",
++    };
++  }
 +
 +  for (let i = 1; i <= 5; i++) {
 +    const userParam = `user${i}`;

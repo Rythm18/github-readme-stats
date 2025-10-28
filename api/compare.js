@@ -19,6 +19,18 @@ const compareCache = new Map();
 const extractUsernames = (query) => {
   const usernames = [];
 
+  // Check for more than 5 users
+  const hasExtraUsers = Object.keys(query).some((key) =>
+    /^user([6-9]|\d{2,})$/.test(key),
+  );
+
+  if (hasExtraUsers) {
+    return {
+      usernames: [],
+      error: "Please provide up to 5 users",
+    };
+  }
+
   for (let i = 1; i <= 5; i++) {
     const userParam = `user${i}`;
     if (query[userParam]) {

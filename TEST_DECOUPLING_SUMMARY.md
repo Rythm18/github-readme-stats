@@ -23,17 +23,20 @@ The original tests for `/api/compare` suffered from tight coupling to implementa
 - **Complete coverage**: Added tests for rate limiting (429), percentage fields, cached indicators, and stats filtering
 
 **What Tests Now Validate:**
-- ✅ HTTP status codes (200, 400, 404, 429, 500)
+- ✅ HTTP status codes (200, 400, 401, 403, 404, 429, 500)
+- ✅ Input validation (minimum 2 users, maximum 5 users)
 - ✅ Error messages are present and informative
 - ✅ Response structure matches one of three defined formats (detailed/compact/leaderboard)
 - ✅ Leaders are correctly identified (highest value wins)
 - ✅ Percentage differences are computed and included
 - ✅ Cached indicator is present in detailed format
 - ✅ Cache headers are set appropriately
+- ✅ Cache keys incorporate option variations (format, include_all_commits, exclude_repo)
 - ✅ Parameters have observable effects (include_all_commits, exclude_repo, stats filtering)
 - ✅ ISO-8601 timestamps are valid across all formats
 - ✅ Cached flag semantics (first miss, subsequent hit) are enforced
 - ✅ Rate limiting returns 429 and guard-based denials are respected (blacklist, invalid PAT)
+- ✅ Summary thresholds classify close (<10%) vs significant (>50%) differences
 - ✅ Responses strip sensitive details from error messages
 
 **What Tests NO LONGER Enforce:**
@@ -78,7 +81,7 @@ Updated repository memory with best practices for writing behavior-focused tests
 3. **Maintainable**: Tests are easier to read and modify
 4. **Flexible**: Implementers have freedom in how they solve the problem
 5. **Robust**: Tests validate actual correctness rather than arbitrary internal details
-6. **Complete**: All documented behaviors are now tested (rate limiting, percentage, cached flag, parameter effects)
+6. **Complete**: All documented behaviors are now tested (rate limiting, user limits, cache semantics, percentage thresholds, parameter effects)
 
 ## Files Changed
 

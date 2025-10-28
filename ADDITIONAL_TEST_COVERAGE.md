@@ -219,6 +219,100 @@ describe("error handling", () => {
 
 ---
 
+### 6. ✅ Maximum user limit enforced
+
+**Issue:**
+The API accepts up to 5 users (user1...user5). Tests previously verified the minimum of 2 users but not the maximum constraint.
+
+**Test Added:**
+```javascript
+it("rejects more than five users", async () => {
+  const res = await invokeCompare({
+    user1: "alice",
+    user2: "bob",
+    user3: "charlie",
+    user4: "dave",
+    user5: "eve",
+    user6: "frank",
+  });
+
+  expect(res.status).toHaveBeenCalledWith(400);
+  expect(res.json).toHaveBeenCalledWith(
+    expect.objectContaining({
+      message: expect.stringMatching(/up to 5/i),
+    }),
+  );
+});
+```
+
+**Validates:**
+- Requests with `user6`, `user7`, etc. are rejected
+- Error message clearly communicates the 5-user maximum
+- Prevents unintended comparison sizes
+
+---
+
+### 7. ✅ Cache key respects option permutations
+
+**Issue:**
+Cache tests verified hit/miss behavior but did not confirm cache key composition across options (format, include_all_commits, exclude_repo).
+
+**Test Added:**
+```javascript
+it("uses distinct cache entries for different options", async () => {
+  const handler = await loadCompareHandler();
+
+  await handler({
+    query: { user1: "alice", user2: "bob", include_all_commits: "true" },
+  }, createMockResponse());
+
+  fetchStatsMock.mockClear();
+  await handler({
+    query: { user1: "alice", user2: "bob", format: "compact" },
+  }, createMockResponse());
+  expect(fetchStatsMock).toHaveBeenCalled();
+
+  fetchStatsMock.mockClear();
+  await handler({
+    query: { user1: "alice", user2: "bob", exclude_repo: "repo1" },
+  }, createMockResponse());
+  expect(fetchStatsMock).toHaveBeenCalled();
+});
+```
+
+**Validates:**
+- Cache misses when format changes (detailed ↔ compact)
+- Cache misses when `include_all_commits` toggled
+- Cache misses when `exclude_repo` filters change
+- Confirms cache keys include users + option hash
+
+---
+
+### 8. ✅ Close vs significant difference thresholds
+
+**Issue:**
+Tests checked that summary arrays existed but not the underlying threshold logic (close < 10%, significant > 50%).
+
+**Test Added:**
+```javascript
+it("classifies close and significant differences based on thresholds", async () => {
+  fetchStatsMock
+    .mockResolvedValueOnce(makeStats("alice", { totalCommits: 100, totalStars: 100 }))
+    .mockResolvedValueOnce(makeStats("bob", { totalCommits: 105, totalStars: 300 }));
+
+  const payload = getPayload(await invokeCompare({ user1: "alice", user2: "bob" }));
+  expect(payload.summary.close_stats).toContain("totalCommits");
+  expect(payload.summary.significant_differences).toContain("totalStars");
+});
+```
+
+**Validates:**
+- Differences under 10% are classified as "close"
+- Differences over 50% are classified as "significant"
+- Ensures summaries reflect documented thresholds
+
+---
+
 ## Test Organization
 
 The new tests are organized into logical groups:
@@ -234,7 +328,8 @@ With these additions, the test suite now covers:
 
 - ✅ All 3 response formats (detailed, compact, leaderboard)
 - ✅ All HTTP status codes (200, 400, 401, 403, 404, 429, 500)
-- ✅ Cache hit/miss semantics
+- ✅ Input validation (min 2, max 5 users)
+- ✅ Cache hit/miss semantics with option-based keys
 - ✅ Access control (rate limiting, blacklist, PAT validation)
 - ✅ Timestamp validation across all formats
 - ✅ Parameter effects (include_all_commits, exclude_repo, stats filtering)
@@ -242,6 +337,7 @@ With these additions, the test suite now covers:
 - ✅ Cached flag behavior
 - ✅ Sensitive information protection
 - ✅ Error handling and sanitization
+- ✅ Summary threshold logic (close <10%, significant >50%)
 
 ## Behavioral Contracts Validated
 
@@ -259,6 +355,9 @@ All MUST requirements from the specification are now tested:
 | Respect include_all_commits | ✅ Observable commit count changes |
 | Respect exclude_repo | ✅ Observable star count changes |
 | Apply access controls | ✅ Rate limit, blacklist, PAT tests |
+| Enforce user limit (≤5) | ✅ Validation error test |
+| Cache key respects options | ✅ Cache permutations test |
+| Summary thresholds (close/significant) | ✅ Threshold classification test |
 | Not expose sensitive info | ✅ Token/path sanitization test |
 | Indicate cache status | ✅ Cached flag semantics test |
 

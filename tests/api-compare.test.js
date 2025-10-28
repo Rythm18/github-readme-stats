@@ -156,6 +156,24 @@ describe("GET /api/compare", () => {
       expect(payload.comparison.users).toEqual(expect.arrayContaining(users));
     });
 
+    it("rejects more than five users", async () => {
+      const res = await invokeCompare({
+        user1: "alice",
+        user2: "bob",
+        user3: "charlie",
+        user4: "dave",
+        user5: "eve",
+        user6: "frank",
+      });
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringMatching(/up to 5/i),
+        }),
+      );
+    });
+
     it("rejects unsupported formats", async () => {
       const res = await invokeCompare({
         user1: "alice",
@@ -480,6 +498,64 @@ describe("GET /api/compare", () => {
       expect(secondPayload?.comparison?.cached).toBe(true);
       expect(fetchStatsMock).not.toHaveBeenCalled();
     });
+
+    it("uses distinct cache entries for different options", async () => {
+      const handler = await loadCompareHandler();
+
+      fetchStatsMock
+        .mockResolvedValueOnce(makeStats("alice", { totalCommits: 200 }))
+        .mockResolvedValueOnce(makeStats("bob", { totalCommits: 150 }));
+
+      const includeRes = createMockResponse();
+      await handler(
+        {
+          query: {
+            user1: "alice",
+            user2: "bob",
+            include_all_commits: "true",
+          },
+        },
+        includeRes,
+      );
+      const includePayload = getPayload(includeRes);
+      expect(includePayload?.comparison?.cached).toBe(false);
+
+      fetchStatsMock.mockClear();
+
+      const formatRes = createMockResponse();
+      await handler(
+        {
+          query: {
+            user1: "alice",
+            user2: "bob",
+            format: "compact",
+          },
+        },
+        formatRes,
+      );
+      const formatPayload = getPayload(formatRes);
+      expect(formatPayload).toHaveProperty("diff");
+      expect(formatPayload).not.toHaveProperty("comparison");
+
+      expect(fetchStatsMock).toHaveBeenCalled();
+
+      fetchStatsMock.mockClear();
+
+      const excludeRes = createMockResponse();
+      await handler(
+        {
+          query: {
+            user1: "alice",
+            user2: "bob",
+            exclude_repo: "repo1",
+          },
+        },
+        excludeRes,
+      );
+      const excludePayload = getPayload(excludeRes);
+      expect(excludePayload?.comparison?.cached).toBe(false);
+      expect(fetchStatsMock).toHaveBeenCalled();
+    });
   });
 
   describe("error handling", () => {
@@ -631,6 +707,29 @@ describe("GET /api/compare", () => {
       );
       expect(Array.isArray(payload.summary.close_stats)).toBe(true);
       expect(Array.isArray(payload.summary.significant_differences)).toBe(true);
+    });
+
+    it("classifies close and significant differences based on thresholds", async () => {
+      fetchStatsMock
+        .mockResolvedValueOnce(
+          makeStats("alice", {
+            totalCommits: 100,
+            totalStars: 100,
+          }),
+        )
+        .mockResolvedValueOnce(
+          makeStats("bob", {
+            totalCommits: 105, // ~4.7% difference (close)
+            totalStars: 300, // 66% difference (significant)
+          }),
+        );
+
+      const res = await invokeCompare({ user1: "alice", user2: "bob" });
+      const payload = getPayload(res);
+      const { summary } = payload;
+
+      expect(summary.close_stats).toContain("totalCommits");
+      expect(summary.significant_differences).toContain("totalStars");
     });
   });
 });
