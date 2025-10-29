@@ -33,6 +33,7 @@ const loadCompareHandler = async () => {
     try {
       const module = await import(candidate);
       loadCompareHandler.cached = module.default;
+      loadCompareHandler.clearCache = module.clearCompareCache;
       return loadCompareHandler.cached;
     } catch (error) {
       lastError = error;
@@ -49,9 +50,9 @@ const loadCompareHandler = async () => {
 /**
  * Build a StatsData mock for a given user.
  *
- * @param {string} username
- * @param {Partial<StatsData>} [overrides]
- * @returns {StatsData}
+ * @param {string} username Username to generate stats for
+ * @param {Partial<StatsData>} [overrides] Optional StatsData overrides
+ * @returns {StatsData} Mock StatsData object
  */
 const makeStats = (username, overrides = {}) => ({
   name: `${username} Doe`,
@@ -71,6 +72,8 @@ const makeStats = (username, overrides = {}) => ({
 
 /**
  * Create a mock Express-style response.
+ *
+ * @returns {object} Mock response object
  */
 const createMockResponse = () => ({
   status: jest.fn().mockReturnThis(),
@@ -81,7 +84,8 @@ const createMockResponse = () => ({
 /**
  * Invoke the compare handler with a query object.
  *
- * @param {Record<string, unknown>} query
+ * @param {Record<string, unknown>} query Request query parameters
+ * @returns {Promise<ReturnType<typeof createMockResponse>>} Response mock
  */
 const invokeCompare = async (query) => {
   const handler = await loadCompareHandler();
@@ -95,14 +99,24 @@ const invokeCompare = async (query) => {
 
 /**
  * Extract the last JSON payload sent through res.json.
+ *
+ * @param {ReturnType<typeof createMockResponse>} res Response mock
+ * @returns {object | undefined} JSON payload
  */
 const getPayload = (res) => res.json.mock.calls.at(-1)?.[0];
 
-beforeEach(() => {
+beforeEach(async () => {
   fetchStatsMock.mockReset();
+  fetchStatsMock.mockImplementation((username) =>
+    Promise.resolve(makeStats(username)),
+  );
+
   guardAccessMock.mockReset();
   guardAccessMock.mockReturnValue({ isPassed: true, result: undefined });
   loadCompareHandler.cached = undefined;
+
+  await loadCompareHandler();
+  loadCompareHandler.clearCache?.();
 });
 
 afterEach(() => {

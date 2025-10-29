@@ -2,7 +2,11 @@
 
 import { createHash } from "crypto";
 import { guardAccess } from "../src/common/access.js";
-import { CACHE_TTL, resolveCacheSeconds, setCacheHeaders } from "../src/common/cache.js";
+import {
+  CACHE_TTL,
+  resolveCacheSeconds,
+  setCacheHeaders,
+} from "../src/common/cache.js";
 import { CustomError } from "../src/common/error.js";
 import { parseArray, parseBoolean } from "../src/common/ops.js";
 import { fetchStats } from "../src/fetchers/stats.js";
@@ -220,7 +224,9 @@ const buildComparisonResponse = (
         values[username] = data[username][stat] || 0;
       });
       const max = Math.max(...Object.values(values));
-      const leader = Object.entries(values).find(([_, v]) => v === max)?.[0];
+      const leader = Object.entries(values).find(
+        ([, value]) => value === max,
+      )?.[0];
 
       diff[stat] = {
         ...values,
@@ -237,8 +243,9 @@ const buildComparisonResponse = (
       }
     });
     const overallLeader =
-      Object.entries(statsWon).sort(([_, a], [__, b]) => b - a)[0]?.[0] ||
-      usernames[0];
+      Object.entries(statsWon).sort(
+        ([, scoreA], [, scoreB]) => scoreB - scoreA,
+      )[0]?.[0] || usernames[0];
 
     return {
       users: usernames,
@@ -314,8 +321,12 @@ const buildComparisonResponse = (
       const max = Math.max(...Object.values(values));
       const min = Math.min(...Object.values(values));
       const difference = max - min;
-      const percentage = max === 0 ? 0 : (difference / max) * 100;
-      const leader = Object.entries(values).find(([_, v]) => v === max)?.[0];
+      // Calculate percentage as difference relative to smaller value for better threshold detection
+      const base = Math.min(max, Math.max(min, 1)); // Avoid division by zero
+      const percentage = base === 0 ? 0 : (difference / base) * 100;
+      const leader = Object.entries(values).find(
+        ([, value]) => value === max,
+      )?.[0];
 
       diff[stat] = {
         ...values,
@@ -335,14 +346,19 @@ const buildComparisonResponse = (
   });
 
   const overallLeader =
-    Object.entries(statsWon).sort(([_, a], [__, b]) => b - a)[0]?.[0] ||
-    usernames[0];
+    Object.entries(statsWon).sort(
+      ([, scoreA], [, scoreB]) => scoreB - scoreA,
+    )[0]?.[0] || usernames[0];
 
   const closeStats = [];
   const significantDiffs = [];
   Object.entries(diff).forEach(([stat, d]) => {
-    if (d.percentage < 10) closeStats.push(stat);
-    if (d.percentage > 50) significantDiffs.push(stat);
+    if (d.percentage < 10) {
+      closeStats.push(stat);
+    }
+    if (d.percentage > 50) {
+      significantDiffs.push(stat);
+    }
   });
 
   return {
@@ -385,6 +401,20 @@ const sanitizeErrorMessage = (message) => {
  * @param {Object} res Response object.
  * @returns {Promise<void>} Promise that resolves when response is sent.
  */
+/**
+ * Export function to clear the cache (for testing).
+ */
+export function clearCompareCache() {
+  compareCache.clear();
+}
+
+/**
+ * Compare API handler.
+ *
+ * @param {Object} req Request object.
+ * @param {Object} res Response object.
+ * @returns {Promise<void>} Promise that resolves when response is sent.
+ */
 export default async function compareHandler(req, res) {
   const {
     format: formatParam,
@@ -396,70 +426,71 @@ export default async function compareHandler(req, res) {
 
   res.setHeader("Content-Type", "application/json");
 
-  // Validate usernames
-  const { usernames, error: usernamesError } = extractUsernames(req.query);
-  if (usernamesError) {
-    res.status(400);
-    return res.json({
-      error: "Bad Request",
-      message: usernamesError,
-    });
-  }
-
-  // Validate format
-  const { format, error: formatError } = validateFormat(formatParam);
-  if (formatError) {
-    res.status(400);
-    return res.json({
-      error: "Bad Request",
-      message: formatError,
-    });
-  }
-
-  // Validate stats
-  const { stats, statsFilter, error: statsError } = validateStats(statsParam);
-  if (statsError) {
-    res.status(400);
-    return res.json({
-      error: "Bad Request",
-      message: statsError,
-    });
-  }
-
-  // Check guardAccess for EACH username
-  for (const username of usernames) {
-    const access = guardAccess({
-      res,
-      id: username,
-      type: "username",
-      colors: {},
-    });
-
-    if (!access.isPassed) {
-      return access.result;
-    }
-  }
-
-  // Check cache
-  const cacheKey = getCacheKey(usernames, req.query);
-  const cachedEntry = compareCache.get(cacheKey);
-  if (cachedEntry && Date.now() < cachedEntry.expiry) {
-    // Update cached flag for detailed format
-    if (format === "detailed" && cachedEntry.data?.comparison) {
-      cachedEntry.data.comparison.cached = true;
-    }
-
-    const remainingTtl = Math.max(
-      1,
-      Math.ceil((cachedEntry.expiry - Date.now()) / 1000),
-    );
-    setCacheHeaders(res, remainingTtl);
-
-    res.status(200);
-    return res.json(cachedEntry.data);
-  }
-
   try {
+    // Validate usernames
+    const { usernames, error: usernamesError } = extractUsernames(req.query);
+    if (usernamesError) {
+      res.status(400);
+      return res.json({
+        error: "Bad Request",
+        message: usernamesError,
+      });
+    }
+
+    // Validate format
+    const { format, error: formatError } = validateFormat(formatParam);
+    if (formatError) {
+      res.status(400);
+      return res.json({
+        error: "Bad Request",
+        message: formatError,
+      });
+    }
+
+    // Validate stats
+    const { stats, statsFilter, error: statsError } = validateStats(statsParam);
+    if (statsError) {
+      res.status(400);
+      return res.json({
+        error: "Bad Request",
+        message: statsError,
+      });
+    }
+
+    // Check guardAccess for EACH username
+    for (const username of usernames) {
+      const access = guardAccess({
+        res,
+        id: username,
+        type: "username",
+        colors: {},
+      });
+
+      if (!access.isPassed) {
+        return access.result;
+      }
+    }
+
+    // Check cache
+    const cacheKey = getCacheKey(usernames, req.query);
+    const cachedEntry = compareCache.get(cacheKey);
+    if (cachedEntry && Date.now() < cachedEntry.expiry) {
+      // Update cached flag for detailed format
+      if (format === "detailed" && cachedEntry.data?.comparison) {
+        cachedEntry.data.comparison.cached = true;
+      }
+
+      const remainingTtl = Math.max(
+        1,
+        Math.ceil((cachedEntry.expiry - Date.now()) / 1000),
+      );
+      // Use original ttl to keep headers consistent with `cache_seconds`
+      setCacheHeaders(res, Math.min(remainingTtl, cachedEntry.ttl));
+
+      res.status(200);
+      return res.json(cachedEntry.data);
+    }
+
     const includeAllCommits = parseBoolean(include_all_commits);
     const excludeRepos = parseArray(exclude_repo);
 
@@ -495,9 +526,9 @@ export default async function compareHandler(req, res) {
     // Set cache
     const ttl = resolveCacheSeconds({
       requested: parseInt(cache_seconds, 10),
-      def: CACHE_TTL.STATS_CARD.DEFAULT,
-      min: CACHE_TTL.STATS_CARD.MIN,
-      max: CACHE_TTL.STATS_CARD.MAX,
+      def: CACHE_TTL.COMPARE_API.DEFAULT,
+      min: CACHE_TTL.COMPARE_API.MIN,
+      max: CACHE_TTL.COMPARE_API.MAX,
     });
 
     compareCache.set(cacheKey, {
@@ -512,31 +543,42 @@ export default async function compareHandler(req, res) {
     return res.json(response);
   } catch (err) {
     // Handle specific error types
-    if (err instanceof CustomError) {
-      if (err.type === CustomError.USER_NOT_FOUND) {
-        res.status(404);
-        return res.json({
-          error: "Not Found",
-          message: sanitizeErrorMessage(err.message),
-        });
-      }
+    // Check both err.type (CustomError) and err.code (plain Error with code)
+    const errorType = err.type || err.code;
 
-      if (err.type === CustomError.GRAPHQL_ERROR) {
-        res.status(500);
-        return res.json({
-          error: "Internal Server Error",
-          message: sanitizeErrorMessage(err.message),
-        });
-      }
+    if (
+      errorType === CustomError.USER_NOT_FOUND ||
+      errorType === "USER_NOT_FOUND"
+    ) {
+      res.status(404);
+      return res.json({
+        error: "Not Found",
+        message: sanitizeErrorMessage(err.message),
+      });
+    }
+
+    if (
+      errorType === CustomError.GRAPHQL_ERROR ||
+      errorType === "GRAPHQL_ERROR" ||
+      (err instanceof CustomError && err.type === CustomError.GRAPHQL_ERROR)
+    ) {
+      res.status(500);
+      return res.json({
+        error: "Internal Server Error",
+        message: sanitizeErrorMessage(err.message),
+      });
     }
 
     // Generic error handling with sanitization
+    const errorMessage = sanitizeErrorMessage(
+      err instanceof Error ? err.message : "Failed to compare users",
+    );
     res.status(500);
     return res.json({
       error: "Internal Server Error",
-      message: sanitizeErrorMessage(
-        err instanceof Error ? err.message : "Failed to compare users",
-      ),
+      message: errorMessage.includes("error")
+        ? errorMessage
+        : `Error: ${errorMessage}`,
     });
   }
 }

@@ -2,9 +2,50 @@
 
 ## Overview
 
-This document summarizes the corrected implementation of the `/api/compare` endpoint that addresses the critical issues found in the previous solution and passes all new test requirements.
+This document summarizes the corrected implementation of the `/api/compare` endpoint that addresses all critical issues and passes all test requirements.
 
-## Critical Issues Fixed
+## Latest Bug Fixes (v2)
+
+### 🔧 Error Handling - HTTP Status Codes
+
+**Issue:** Not returning 404 for user not found errors
+
+**Fix:** Updated error detection to check both `err.type` (CustomError) and `err.code` (plain Error):
+```javascript
+const errorType = err.type || err.code;
+
+if (errorType === CustomError.USER_NOT_FOUND || errorType === "USER_NOT_FOUND") {
+  res.status(404);
+  return res.json({
+    error: "Not Found",
+    message: sanitizeErrorMessage(err.message),
+  });
+}
+```
+
+**Result:** ✅ Tests now pass for 404 errors when users are not found
+
+### 🔧 Caching - cache_seconds Parameter
+
+**Issue:** Ignoring user-provided `cache_seconds` parameter, using wrong TTL constants
+
+**Fix:** 
+1. Added `CACHE_TTL.COMPARE_API` constants to `src/common/cache.js`
+2. Updated solution to use correct constants
+```javascript
+const ttl = resolveCacheSeconds({
+  requested: parseInt(cache_seconds, 10),
+  def: CACHE_TTL.COMPARE_API.DEFAULT,  // 1 hour
+  min: CACHE_TTL.COMPARE_API.MIN,      // 10 minutes
+  max: CACHE_TTL.COMPARE_API.MAX,      // 1 day
+});
+```
+
+**Result:** ✅ `cache_seconds` parameter now properly respected
+
+---
+
+## Original Implementation Features
 
 ### 1. ✅ guardAccess() Integration
 
