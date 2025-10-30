@@ -47,6 +47,8 @@ const loadCompareHandler = async () => {
  * @typedef {import("../src/fetchers/stats.js").StatsData} StatsData
  */
 
+process.env.PAT_1 = process.env.PAT_1 || "test_pat_token";
+
 /**
  * Build a StatsData mock for a given user.
  *
