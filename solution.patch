@@ -1,0 +1,576 @@
+diff --git a/api/compare.js b/api/compare.js
+new file mode 100644
+index 0000000..9855cc8
+--- /dev/null
++++ b/api/compare.js
+@@ -0,0 +1,570 @@
++// @ts-check
++
++import { createHash } from "crypto";
++import { guardAccess } from "../src/common/access.js";
++import { CACHE_TTL, resolveCacheSeconds, setCacheHeaders } from "../src/common/cache.js";
++import { CustomError } from "../src/common/error.js";
++import { parseArray, parseBoolean } from "../src/common/ops.js";
++import { fetchStats } from "../src/fetchers/stats.js";
++
++// Module-level cache for comparison results
++const compareCache = new Map();
++
++/**
++ * Validate and extract user parameters from query.
++ *
++ * @param {Object} query Request query object.
++ * @returns {{usernames: Array<string>, error?: string}} Validation result.
++ */
++const extractUsernames = (query) => {
++  const usernames = [];
++
++  // Check for more than 5 users
++  const hasExtraUsers = Object.keys(query).some((key) =>
++    /^user([6-9]|\d{2,})$/.test(key),
++  );
++
++  if (hasExtraUsers) {
++    return {
++      usernames: [],
++      error: "Please provide up to 5 users",
++    };
++  }
++
++  for (let i = 1; i <= 5; i++) {
++    const userParam = `user${i}`;
++    if (query[userParam]) {
++      usernames.push(query[userParam].trim());
++    }
++  }
++
++  if (usernames.length === 0) {
++    return {
++      usernames: [],
++      error: "Missing required parameters: user1, user2",
++    };
++  }
++
++  if (usernames.length === 1) {
++    return {
++      usernames: [],
++      error: "Please provide at least 2 users (user1 and user2)",
++    };
++  }
++
++  return { usernames };
++};
++
++/**
++ * Validate stats parameter.
++ *
++ * @param {string|undefined} statsParam Stats query parameter.
++ * @returns {{stats: Array<string>, statsFilter: Array<string>, error?: string}} Validation result.
++ */
++const validateStats = (statsParam) => {
++  if (!statsParam) {
++    return { stats: [], statsFilter: [] };
++  }
++
++  const validStats = [
++    "commits",
++    "prs",
++    "issues",
++    "stars",
++    "reviews",
++    "discussions",
++    "discussions_answered",
++    "contributed_to",
++    "rank",
++  ];
++
++  const requestedStats = statsParam.split(",").map((s) => s.trim());
++  const invalidStats = requestedStats.filter((s) => !validStats.includes(s));
++
++  if (invalidStats.length > 0) {
++    return {
++      stats: [],
++      statsFilter: [],
++      error: `Invalid stats: ${invalidStats.join(", ")}. Valid options: ${validStats.join(", ")}`,
++    };
++  }
++
++  const statsMapping = {
++    commits: "totalCommits",
++    prs: "totalPRs",
++    issues: "totalIssues",
++    stars: "totalStars",
++    reviews: "totalReviews",
++    discussions: "totalDiscussionsStarted",
++    discussions_answered: "totalDiscussionsAnswered",
++    contributed_to: "contributedTo",
++    rank: "rank",
++  };
++
++  return {
++    stats: requestedStats.map((s) => statsMapping[s]),
++    statsFilter: requestedStats,
++  };
++};
++
++/**
++ * Validate format parameter.
++ *
++ * @param {string|undefined} formatParam Format query parameter.
++ * @returns {{format: string, error?: string}} Validation result.
++ */
++const validateFormat = (formatParam) => {
++  const format = formatParam || "detailed";
++  const validFormats = ["detailed", "compact", "leaderboard"];
++
++  if (!validFormats.includes(format)) {
++    return {
++      format: "detailed",
++      error: `Invalid format: ${format}. Valid options: ${validFormats.join(", ")}`,
++    };
++  }
++
++  return { format };
++};
++
++/**
++ * Generate cache key for comparison request.
++ *
++ * @param {Array<string>} usernames Usernames to compare.
++ * @param {Object} options Request options.
++ * @returns {string} Cache key.
++ */
++const getCacheKey = (usernames, options) => {
++  const userKey = usernames.sort().join(",");
++  const optionsKey = JSON.stringify({
++    format: options.format || "detailed",
++    stats: options.stats || "all",
++    include_all_commits: options.include_all_commits,
++    exclude_repo: options.exclude_repo,
++  });
++  const hash = createHash("md5").update(optionsKey).digest("hex").slice(0, 8);
++  return `compare:${userKey}:${hash}`;
++};
++
++/**
++ * Calculate diff between two users for a stat.
++ *
++ * @param {string} stat Stat name.
++ * @param {Object} userData1 First user's stats.
++ * @param {Object} userData2 Second user's stats.
++ * @param {string} username1 First username.
++ * @param {string} username2 Second username.
++ * @returns {Object} Diff object.
++ */
++const calculateDiff = (stat, userData1, userData2, username1, username2) => {
++  const val1 = userData1[stat] || 0;
++  const val2 = userData2[stat] || 0;
++  const diff = Math.abs(val1 - val2);
++  const max = Math.max(val1, val2);
++  const percentage = max === 0 ? 0 : (diff / max) * 100;
++
++  return {
++    [username1]: val1,
++    [username2]: val2,
++    difference: diff,
++    percentage: parseFloat(percentage.toFixed(2)),
++    leader: val1 > val2 ? username1 : val2 > val1 ? username2 : username1,
++  };
++};
++
++/**
++ * Compare users and generate response.
++ *
++ * @param {Array<string>} usernames Usernames.
++ * @param {Array<Object>} allStats Stats for all users.
++ * @param {{ statProperties: Array<string>, statsFilter: Array<string> }} statOptions
++ *   statProperties: Stat keys in StatsData (e.g. totalCommits)
++ *   statsFilter: Original requested stat names (e.g. commits)
++ * @param {string} format Response format.
++ * @param {boolean} cached Whether from cache.
++ * @returns {Object} Comparison response.
++ */
++const buildComparisonResponse = (
++  usernames,
++  allStats,
++  statOptions,
++  format,
++  cached,
++) => {
++  const { statProperties, statsFilter } = statOptions;
++  const timestamp = new Date().toISOString();
++
++  // Build data object
++  const data = {};
++  usernames.forEach((username, idx) => {
++    data[username] = allStats[idx];
++  });
++
++  if (format === "compact") {
++    // Compact format
++    const diff = {};
++    const statKeys =
++      statProperties.length > 0
++        ? statProperties
++        : [
++            "totalCommits",
++            "totalPRs",
++            "totalIssues",
++            "totalStars",
++            "totalReviews",
++          ];
++
++    statKeys.forEach((stat) => {
++      const values = {};
++      usernames.forEach((username) => {
++        values[username] = data[username][stat] || 0;
++      });
++      const max = Math.max(...Object.values(values));
++      const leader = Object.entries(values).find(([, value]) => value === max)?.[0];
++
++      diff[stat] = {
++        ...values,
++        delta: max - Math.min(...Object.values(values)),
++        leader,
++      };
++    });
++
++    const statsWon = {};
++    usernames.forEach((u) => (statsWon[u] = 0));
++    Object.values(diff).forEach((d) => {
++      if (d.leader && statsWon[d.leader] !== undefined) {
++        statsWon[d.leader]++;
++      }
++    });
++    const overallLeader =
++      Object.entries(statsWon).sort(([, scoreA], [, scoreB]) => scoreB - scoreA)[0]?.[0] ||
++      usernames[0];
++
++    return {
++      users: usernames,
++      timestamp,
++      diff,
++      leader: overallLeader,
++    };
++  }
++
++  if (format === "leaderboard") {
++    // Leaderboard format
++    const scored = usernames.map((username, idx) => {
++      const stats = allStats[idx];
++      const score =
++        (stats.totalCommits || 0) * 1 +
++        (stats.totalPRs || 0) * 3 +
++        (stats.totalStars || 0) * 2 +
++        (stats.totalIssues || 0) * 1 +
++        (stats.totalReviews || 0) * 2;
++
++      return {
++        username,
++        name: stats.name,
++        totalScore: score,
++        stats,
++      };
++    });
++
++    scored.sort((a, b) => b.totalScore - a.totalScore);
++    const leaderboard = scored.map((entry, idx) => ({
++      rank: idx + 1,
++      ...entry,
++    }));
++
++    return {
++      leaderboard,
++      timestamp,
++    };
++  }
++
++  // Detailed format (default)
++  const diff = {};
++  const statKeys =
++    statProperties.length > 0
++      ? statProperties
++      : [
++          "totalCommits",
++          "totalPRs",
++          "totalIssues",
++          "totalStars",
++          "totalReviews",
++          "totalDiscussionsStarted",
++          "totalDiscussionsAnswered",
++          "contributedTo",
++        ];
++
++  if (usernames.length === 2) {
++    statKeys.forEach((stat) => {
++      diff[stat] = calculateDiff(
++        stat,
++        data[usernames[0]],
++        data[usernames[1]],
++        usernames[0],
++        usernames[1],
++      );
++    });
++  } else {
++    statKeys.forEach((stat) => {
++      const values = {};
++      usernames.forEach((username) => {
++        values[username] = data[username][stat] || 0;
++      });
++      const max = Math.max(...Object.values(values));
++      const min = Math.min(...Object.values(values));
++      const difference = max - min;
++      // Calculate percentage as difference relative to smaller value for better threshold detection
++      const base = Math.min(max, Math.max(min, 1)); // Avoid division by zero
++      const percentage = base === 0 ? 0 : (difference / base) * 100;
++      const leader = Object.entries(values).find(([, value]) => value === max)?.[0];
++
++      diff[stat] = {
++        ...values,
++        difference,
++        percentage: parseFloat(percentage.toFixed(2)),
++        leader,
++      };
++    });
++  }
++
++  const statsWon = {};
++  usernames.forEach((u) => (statsWon[u] = 0));
++  Object.values(diff).forEach((d) => {
++    if (d.leader && statsWon[d.leader] !== undefined) {
++      statsWon[d.leader]++;
++    }
++  });
++
++  const overallLeader =
++    Object.entries(statsWon).sort(([, scoreA], [, scoreB]) => scoreB - scoreA)[0]?.[0] ||
++    usernames[0];
++
++  const closeStats = [];
++  const significantDiffs = [];
++  Object.entries(diff).forEach(([stat, d]) => {
++    if (d.percentage < 10) {
++      closeStats.push(stat);
++    }
++    if (d.percentage > 50) {
++      significantDiffs.push(stat);
++    }
++  });
++
++  return {
++    comparison: {
++      users: usernames,
++      timestamp,
++      cached,
++      stats_compared: statsFilter.length > 0 ? statsFilter : ["all"],
++    },
++    data,
++    diff,
++    summary: {
++      overall_leader: overallLeader,
++      stats_won: statsWon,
++      close_stats: closeStats,
++      significant_differences: significantDiffs,
++    },
++  };
++};
++
++/**
++ * Sanitize error message to remove sensitive information.
++ *
++ * @param {string} message Error message.
++ * @returns {string} Sanitized message.
++ */
++const sanitizeErrorMessage = (message) => {
++  let sanitized = message;
++  sanitized = sanitized.replace(/ghp_[a-zA-Z0-9]+/gi, "[REDACTED]");
++  sanitized = sanitized.replace(/token:\s*[^\s]+/gi, "token: [REDACTED]");
++  sanitized = sanitized.replace(/\/[^\s]+\.js:\d+/g, "[PATH]");
++  sanitized = sanitized.replace(/\/[^\s]+\.ts:\d+/g, "[PATH]");
++  return sanitized;
++};
++
++/**
++ * Compare API handler.
++ *
++ * @param {Object} req Request object.
++ * @param {Object} res Response object.
++ * @returns {Promise<void>} Promise that resolves when response is sent.
++ */
++/**
++ * Export function to clear the cache (for testing).
++ */
++export function clearCompareCache() {
++  compareCache.clear();
++}
++
++/**
++ * Compare API handler.
++ *
++ * @param {Object} req Request object.
++ * @param {Object} res Response object.
++ * @returns {Promise<void>} Promise that resolves when response is sent.
++ */
++export default async function compareHandler(req, res) {
++  const {
++    format: formatParam,
++    stats: statsParam,
++    include_all_commits,
++    exclude_repo,
++    cache_seconds,
++  } = req.query;
++
++  res.setHeader("Content-Type", "application/json");
++
++  try {
++    // Validate usernames
++    const { usernames, error: usernamesError } = extractUsernames(req.query);
++    if (usernamesError) {
++      res.status(400);
++      return res.json({
++        error: "Bad Request",
++        message: usernamesError,
++      });
++    }
++
++    // Validate format
++    const { format, error: formatError } = validateFormat(formatParam);
++    if (formatError) {
++      res.status(400);
++      return res.json({
++        error: "Bad Request",
++        message: formatError,
++      });
++    }
++
++    // Validate stats
++    const { stats, statsFilter, error: statsError } = validateStats(statsParam);
++    if (statsError) {
++      res.status(400);
++      return res.json({
++        error: "Bad Request",
++        message: statsError,
++      });
++    }
++
++    // Check guardAccess for EACH username
++    for (const username of usernames) {
++      const access = guardAccess({
++        res,
++        id: username,
++        type: "username",
++        colors: {},
++      });
++
++      if (!access.isPassed) {
++        return access.result;
++      }
++    }
++
++    // Check cache
++    const cacheKey = getCacheKey(usernames, req.query);
++    const cachedEntry = compareCache.get(cacheKey);
++    if (cachedEntry && Date.now() < cachedEntry.expiry) {
++      // Update cached flag for detailed format
++      if (format === "detailed" && cachedEntry.data?.comparison) {
++        cachedEntry.data.comparison.cached = true;
++      }
++
++      const remainingTtl = Math.max(
++        1,
++        Math.ceil((cachedEntry.expiry - Date.now()) / 1000),
++      );
++      // Use original ttl to keep headers consistent with `cache_seconds`
++      setCacheHeaders(res, Math.min(remainingTtl, cachedEntry.ttl));
++
++      res.status(200);
++      return res.json(cachedEntry.data);
++    }
++
++
++    const includeAllCommits = parseBoolean(include_all_commits);
++    const excludeRepos = parseArray(exclude_repo);
++
++    const needsMergedPRs = stats.length === 0 || stats.includes("totalPRs");
++    const needsDiscussions =
++      stats.length === 0 || stats.includes("totalDiscussionsStarted");
++    const needsDiscussionsAnswered =
++      stats.length === 0 || stats.includes("totalDiscussionsAnswered");
++
++    // Fetch stats for all users in parallel
++    const statsPromises = usernames.map((username) =>
++      fetchStats(
++        username,
++        includeAllCommits,
++        excludeRepos,
++        needsMergedPRs,
++        needsDiscussions,
++        needsDiscussionsAnswered,
++      ),
++    );
++
++    const allStats = await Promise.all(statsPromises);
++
++    // Build response
++    const response = buildComparisonResponse(
++      usernames,
++      allStats,
++      { statProperties: stats, statsFilter },
++      format,
++      false,
++    );
++
++    // Set cache
++    const ttl = resolveCacheSeconds({
++      requested: parseInt(cache_seconds, 10),
++      def: CACHE_TTL.COMPARE_API.DEFAULT,
++      min: CACHE_TTL.COMPARE_API.MIN,
++      max: CACHE_TTL.COMPARE_API.MAX,
++    });
++
++    compareCache.set(cacheKey, {
++      data: response,
++      expiry: Date.now() + ttl * 1000,
++      ttl,
++    });
++
++    setCacheHeaders(res, ttl);
++
++    res.status(200);
++    return res.json(response);
++  } catch (err) {
++    // Handle specific error types
++    // Check both err.type (CustomError) and err.code (plain Error with code)
++    const errorType = err.type || err.code;
++    
++    if (errorType === CustomError.USER_NOT_FOUND || errorType === "USER_NOT_FOUND") {
++      res.status(404);
++      return res.json({
++        error: "Not Found",
++        message: sanitizeErrorMessage(err.message),
++      });
++    }
++
++    if (
++      errorType === CustomError.GRAPHQL_ERROR ||
++      errorType === "GRAPHQL_ERROR" ||
++      (err instanceof CustomError && err.type === CustomError.GRAPHQL_ERROR)
++    ) {
++      res.status(500);
++      return res.json({
++        error: "Internal Server Error",
++        message: sanitizeErrorMessage(err.message),
++      });
++    }
++
++    // Generic error handling with sanitization
++    const errorMessage = sanitizeErrorMessage(
++      err instanceof Error ? err.message : "Failed to compare users",
++    );
++    res.status(500);
++    return res.json({
++      error: "Internal Server Error",
++      message: errorMessage.includes("error") ? errorMessage : `Error: ${errorMessage}`,
++    });
++  }
++}
