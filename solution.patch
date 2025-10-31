@@ -1,9 +1,9 @@
 diff --git a/api/compare.js b/api/compare.js
 new file mode 100644
-index 0000000..84c0c95
+index 0000000..a061d12
 --- /dev/null
 +++ b/api/compare.js
-@@ -0,0 +1,428 @@
+@@ -0,0 +1,439 @@
 +// @ts-check
 +
 +import { parseArray, parseBoolean } from "../src/common/ops.js";
@@ -319,7 +319,12 @@ index 0000000..84c0c95
 +    const dataFull = {};
 +    /** @type {Record<string, Record<string, number>>} */
 +    const dataNumeric = {};
++
 +    for (const r of results) {
++      // basic validation: ensure essential numeric fields exist
++      if (!r?.stats || typeof r.stats.totalStars !== "number") {
++        throw new Error("fetcher error");
++      }
 +      dataFull[r.username] = r.stats;
 +      dataNumeric[r.username] = pickNumericStats(r.stats);
 +    }
@@ -333,10 +338,12 @@ index 0000000..84c0c95
 +    if (format === "leaderboard") {
 +      const leaderboard = buildLeaderboard(dataNumeric, includeStats);
 +      payload = {
-+        users,
-+        timestamp,
-+        cached: false,
-+        stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
++        comparison: {
++          users,
++          timestamp,
++          cached: false,
++          stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
++        },
 +        leaderboard,
 +        format,
 +      };
@@ -348,10 +355,12 @@ index 0000000..84c0c95
 +      );
 +
 +      payload = {
-+        users,
-+        timestamp,
-+        cached: false,
-+        stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
++        comparison: {
++          users,
++          timestamp,
++          cached: false,
++          stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
++        },
 +        leader: overallLeader,
 +        diff: diffCompact,
 +        format,
@@ -366,10 +375,12 @@ index 0000000..84c0c95
 +        ]),
 +      );
 +      payload = {
-+        users,
-+        timestamp,
-+        cached: false,
-+        stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
++        comparison: {
++          users,
++          timestamp,
++          cached: false,
++          stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
++        },
 +        data: dataFull,
 +        diff: diffDetailed,
 +        // Provide simple insights: leader summaries and classification
@@ -434,16 +445,16 @@ index 0000000..84c0c95
 +};
 diff --git a/solution.patch b/solution.patch
 new file mode 100644
-index 0000000..1997d36
+index 0000000..8cde2b5
 --- /dev/null
 +++ b/solution.patch
-@@ -0,0 +1,372 @@
+@@ -0,0 +1,371 @@
 +diff --git a/api/compare.js b/api/compare.js
 +new file mode 100644
-+index 0000000..84c0c95
++index 0000000..a061d12
 +--- /dev/null
 ++++ b/api/compare.js
-+@@ -0,0 +1,428 @@
++@@ -0,0 +1,439 @@
 ++// @ts-check
 ++
 ++import { parseArray, parseBoolean } from "../src/common/ops.js";
@@ -759,7 +770,12 @@ index 0000000..1997d36
 ++    const dataFull = {};
 ++    /** @type {Record<string, Record<string, number>>} */
 ++    const dataNumeric = {};
+++
 ++    for (const r of results) {
+++      // basic validation: ensure essential numeric fields exist
+++      if (!r?.stats || typeof r.stats.totalStars !== "number") {
+++        throw new Error("fetcher error");
+++      }
 ++      dataFull[r.username] = r.stats;
 ++      dataNumeric[r.username] = pickNumericStats(r.stats);
 ++    }
@@ -773,10 +789,12 @@ index 0000000..1997d36
 ++    if (format === "leaderboard") {
 ++      const leaderboard = buildLeaderboard(dataNumeric, includeStats);
 ++      payload = {
-++        users,
-++        timestamp,
-++        cached: false,
-++        stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
+++        comparison: {
+++          users,
+++          timestamp,
+++          cached: false,
+++          stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
+++        },
 ++        leaderboard,
 ++        format,
 ++      };
@@ -788,10 +806,12 @@ index 0000000..1997d36
 ++      );
 ++
 ++      payload = {
-++        users,
-++        timestamp,
-++        cached: false,
-++        stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
+++        comparison: {
+++          users,
+++          timestamp,
+++          cached: false,
+++          stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
+++        },
 ++        leader: overallLeader,
 ++        diff: diffCompact,
 ++        format,
@@ -799,15 +819,5 @@ index 0000000..1997d36
 ++    } else {
 ++      // detailed
 ++      const overallLeader = buildLeaderboard(dataNumeric, includeStats)[0]?.username;
-++      const classifications = Object.fromEntries(
-++        Object.entries(diffDetailed).map(([stat, d]) => [
-++          stat,
-++          d.percentage < 5 ? "close" : d.percentage >= 25 ? "significant" : "moderate",
-++        ]),
-++      );
-++      payload = {
-++        users,
-++        timestamp,
-++        cached: false,
-++ 
+++      const classifications = Object.fromEntrie
 \ No newline at end of file
