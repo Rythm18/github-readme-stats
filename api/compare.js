@@ -285,8 +285,8 @@ export default async (req, res) => {
 
     // Fetch each user's stats (full StatsData, not just numeric)
     const results = await Promise.all(
-      users.map((u) =>
-        fetchStats(
+      users.map(async (u) => {
+        const s = await fetchStats(
           u,
           !!include_all_commits,
           exclude_repo,
@@ -294,8 +294,9 @@ export default async (req, res) => {
           needDiscussions,
           needDiscussionAnswers,
           commits_year,
-        ).then((s) => ({ username: u, stats: s }))
-      ),
+        );
+        return { username: u, stats: s };
+      }),
     );
 
     // Map username -> full stats and numeric-only map for computations

@@ -1,9 +1,9 @@
 diff --git a/api/compare.js b/api/compare.js
 new file mode 100644
-index 0000000..ede9047
+index 0000000..a2d254a
 --- /dev/null
 +++ b/api/compare.js
-@@ -0,0 +1,420 @@
+@@ -0,0 +1,421 @@
 +// @ts-check
 +
 +import { parseArray, parseBoolean } from "../src/common/ops.js";
@@ -291,8 +291,8 @@ index 0000000..ede9047
 +
 +    // Fetch each user's stats (full StatsData, not just numeric)
 +    const results = await Promise.all(
-+      users.map((u) =>
-+        fetchStats(
++      users.map(async (u) => {
++        const s = await fetchStats(
 +          u,
 +          !!include_all_commits,
 +          exclude_repo,
@@ -300,8 +300,9 @@ index 0000000..ede9047
 +          needDiscussions,
 +          needDiscussionAnswers,
 +          commits_year,
-+        ).then((s) => ({ username: u, stats: s }))
-+      ),
++        );
++        return { username: u, stats: s };
++      }),
 +    );
 +
 +    // Map username -> full stats and numeric-only map for computations
@@ -426,16 +427,16 @@ index 0000000..ede9047
 +};
 diff --git a/solution.patch b/solution.patch
 new file mode 100644
-index 0000000..f1ab80c
+index 0000000..84567c2
 --- /dev/null
 +++ b/solution.patch
-@@ -0,0 +1,374 @@
+@@ -0,0 +1,373 @@
 +diff --git a/api/compare.js b/api/compare.js
 +new file mode 100644
-+index 0000000..ede9047
++index 0000000..a2d254a
 +--- /dev/null
 ++++ b/api/compare.js
-+@@ -0,0 +1,420 @@
++@@ -0,0 +1,421 @@
 ++// @ts-check
 ++
 ++import { parseArray, parseBoolean } from "../src/common/ops.js";
@@ -723,8 +724,8 @@ index 0000000..f1ab80c
 ++
 ++    // Fetch each user's stats (full StatsData, not just numeric)
 ++    const results = await Promise.all(
-++      users.map((u) =>
-++        fetchStats(
+++      users.map(async (u) => {
+++        const s = await fetchStats(
 ++          u,
 ++          !!include_all_commits,
 ++          exclude_repo,
@@ -732,8 +733,9 @@ index 0000000..f1ab80c
 ++          needDiscussions,
 ++          needDiscussionAnswers,
 ++          commits_year,
-++        ).then((s) => ({ username: u, stats: s }))
-++      ),
+++        );
+++        return { username: u, stats: s };
+++      }),
 ++    );
 ++
 ++    // Map username -> full stats and numeric-only map for computations
@@ -801,7 +803,5 @@ index 0000000..f1ab80c
 ++            stat,
 ++            leader: d.leader,
 ++            percentage: d.percentage,
-++            classification,
-++          };
-++     
+++            classifi
 \ No newline at end of file
