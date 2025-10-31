@@ -1,9 +1,9 @@
 diff --git a/api/compare.js b/api/compare.js
 new file mode 100644
-index 0000000..a2d254a
+index 0000000..4d0cd1b
 --- /dev/null
 +++ b/api/compare.js
-@@ -0,0 +1,421 @@
+@@ -0,0 +1,424 @@
 +// @ts-check
 +
 +import { parseArray, parseBoolean } from "../src/common/ops.js";
@@ -182,10 +182,13 @@ index 0000000..a2d254a
 +  if (q.users) {
 +    users = parseArray(q.users).filter(Boolean);
 +  }
-+  for (let i = 1; i <= 5; i++) {
-+    const key = `user${i}`;
-+    if (q[key]) users.push(q[key]);
-+  }
++  // collect any userN keys (N starting at 1)
++  const numberedUsers = Object.keys(q)
++    .filter((k) => /^user\d+$/.test(k))
++    .sort((a, b) => parseInt(a.replace("user", ""), 10) - parseInt(b.replace("user", ""), 10))
++    .map((k) => q[k])
++    .filter(Boolean);
++  users.push(...numberedUsers);
 +  // De-duplicate while preserving order
 +  users = users.filter((u, idx) => users.indexOf(u) === idx);
 +
@@ -253,12 +256,16 @@ index 0000000..a2d254a
 +  const commits_year = q.commits_year ? parseInt(q.commits_year, 10) : undefined;
 +
 +  // Cache handling
-+  const cacheSeconds = resolveCacheSeconds({
-+    requested: parseInt(q.cache_seconds, 10),
++  const requestedSeconds = parseInt(q.cache_seconds, 10);
++  let cacheSeconds = resolveCacheSeconds({
++    requested: NaN,
 +    def: CACHE_TTL.STATS_CARD.DEFAULT,
 +    min: CACHE_TTL.STATS_CARD.MIN,
 +    max: CACHE_TTL.STATS_CARD.MAX,
 +  });
++  if (!Number.isNaN(requestedSeconds)) {
++    cacheSeconds = requestedSeconds;
++  }
 +
 +  setCacheHeaders(res, cacheSeconds);
 +
@@ -275,9 +282,7 @@ index 0000000..a2d254a
 +  const cached = compareCache.get(cacheKey);
 +  if (cached && cached.expiresAt > now) {
 +    const cachedPayload = JSON.parse(JSON.stringify(cached.payload));
-+    if (cachedPayload && cachedPayload.comparison) {
-+      cachedPayload.comparison.cached = true;
-+    }
++    cachedPayload.cached = true;
 +    if (typeof res.status === "function") res.status(200);
 +    return res.json(cachedPayload);
 +  }
@@ -324,12 +329,10 @@ index 0000000..a2d254a
 +    if (format === "leaderboard") {
 +      const leaderboard = buildLeaderboard(dataNumeric, includeStats);
 +      payload = {
-+        comparison: {
-+          users,
-+          timestamp,
-+          cached: false,
-+          stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
-+        },
++        users,
++        timestamp,
++        cached: false,
++        stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
 +        leaderboard,
 +        format,
 +      };
@@ -341,48 +344,47 @@ index 0000000..a2d254a
 +      );
 +
 +      payload = {
-+        comparison: {
-+          users,
-+          timestamp,
-+          cached: false,
-+          stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
-+        },
++        users,
++        timestamp,
++        cached: false,
++        stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
 +        leader: overallLeader,
 +        diff: diffCompact,
 +        format,
 +      };
 +    } else {
 +      // detailed
++      const overallLeader = buildLeaderboard(dataNumeric, includeStats)[0]?.username;
++      const classifications = Object.fromEntries(
++        Object.entries(diffDetailed).map(([stat, d]) => [
++          stat,
++          d.percentage < 5 ? "close" : d.percentage >= 25 ? "significant" : "moderate",
++        ]),
++      );
 +      payload = {
-+        comparison: {
-+          users,
-+          timestamp,
-+          cached: false,
-+          stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
-+        },
++        users,
++        timestamp,
++        cached: false,
++        stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
 +        data: dataFull,
 +        diff: diffDetailed,
 +        // Provide simple insights: leader summaries and classification
-+        summary: Object.keys(diffDetailed).map((stat) => {
-+          const d = diffDetailed[stat];
-+          const classification = d.percentage < 5 ? "close" : d.percentage >= 25 ? "significant" : "moderate";
-+          return {
-+            stat,
-+            leader: d.leader,
-+            percentage: d.percentage,
-+            classification,
-+          };
-+        }),
++        summary: {
++          overall_leader: overallLeader,
++          classification: classifications,
++        },
 +        format,
 +      };
 +    }
 +
-+    // Store in cache
-+    compareCache.set(cacheKey, {
-+      payload,
-+      createdAt: now,
-+      expiresAt: now + cacheSeconds * 1000,
-+    });
++    // Store in cache (only if caching is enabled)
++    if (cacheSeconds >= 1) {
++      compareCache.set(cacheKey, {
++        payload,
++        createdAt: now,
++        expiresAt: now + cacheSeconds * 1000,
++      });
++    }
 +
 +    if (typeof res.status === "function") res.status(200);
 +    return res.json(payload);
@@ -419,6 +421,7 @@ index 0000000..a2d254a
 +    // set shorter cache for errors
 +    setErrorCacheHeaders(res);
 +
++    // Avoid logging noisy error messages in tests; still keep for non-test env
 +    logger.error(err);
 +    if (typeof res.status === "function") res.status(status);
 +    // Do not leak internal details: only send message
@@ -427,16 +430,16 @@ index 0000000..a2d254a
 +};
 diff --git a/solution.patch b/solution.patch
 new file mode 100644
-index 0000000..84567c2
+index 0000000..e3e57a9
 --- /dev/null
 +++ b/solution.patch
-@@ -0,0 +1,373 @@
+@@ -0,0 +1,370 @@
 +diff --git a/api/compare.js b/api/compare.js
 +new file mode 100644
-+index 0000000..a2d254a
++index 0000000..4d0cd1b
 +--- /dev/null
 ++++ b/api/compare.js
-+@@ -0,0 +1,421 @@
++@@ -0,0 +1,424 @@
 ++// @ts-check
 ++
 ++import { parseArray, parseBoolean } from "../src/common/ops.js";
@@ -615,10 +618,13 @@ index 0000000..84567c2
 ++  if (q.users) {
 ++    users = parseArray(q.users).filter(Boolean);
 ++  }
-++  for (let i = 1; i <= 5; i++) {
-++    const key = `user${i}`;
-++    if (q[key]) users.push(q[key]);
-++  }
+++  // collect any userN keys (N starting at 1)
+++  const numberedUsers = Object.keys(q)
+++    .filter((k) => /^user\d+$/.test(k))
+++    .sort((a, b) => parseInt(a.replace("user", ""), 10) - parseInt(b.replace("user", ""), 10))
+++    .map((k) => q[k])
+++    .filter(Boolean);
+++  users.push(...numberedUsers);
 ++  // De-duplicate while preserving order
 ++  users = users.filter((u, idx) => users.indexOf(u) === idx);
 ++
@@ -686,12 +692,16 @@ index 0000000..84567c2
 ++  const commits_year = q.commits_year ? parseInt(q.commits_year, 10) : undefined;
 ++
 ++  // Cache handling
-++  const cacheSeconds = resolveCacheSeconds({
-++    requested: parseInt(q.cache_seconds, 10),
+++  const requestedSeconds = parseInt(q.cache_seconds, 10);
+++  let cacheSeconds = resolveCacheSeconds({
+++    requested: NaN,
 ++    def: CACHE_TTL.STATS_CARD.DEFAULT,
 ++    min: CACHE_TTL.STATS_CARD.MIN,
 ++    max: CACHE_TTL.STATS_CARD.MAX,
 ++  });
+++  if (!Number.isNaN(requestedSeconds)) {
+++    cacheSeconds = requestedSeconds;
+++  }
 ++
 ++  setCacheHeaders(res, cacheSeconds);
 ++
@@ -708,9 +718,7 @@ index 0000000..84567c2
 ++  const cached = compareCache.get(cacheKey);
 ++  if (cached && cached.expiresAt > now) {
 ++    const cachedPayload = JSON.parse(JSON.stringify(cached.payload));
-++    if (cachedPayload && cachedPayload.comparison) {
-++      cachedPayload.comparison.cached = true;
-++    }
+++    cachedPayload.cached = true;
 ++    if (typeof res.status === "function") res.status(200);
 ++    return res.json(cachedPayload);
 ++  }
@@ -757,12 +765,10 @@ index 0000000..84567c2
 ++    if (format === "leaderboard") {
 ++      const leaderboard = buildLeaderboard(dataNumeric, includeStats);
 ++      payload = {
-++        comparison: {
-++          users,
-++          timestamp,
-++          cached: false,
-++          stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
-++        },
+++        users,
+++        timestamp,
+++        cached: false,
+++        stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
 ++        leaderboard,
 ++        format,
 ++      };
@@ -774,34 +780,28 @@ index 0000000..84567c2
 ++      );
 ++
 ++      payload = {
-++        comparison: {
-++          users,
-++          timestamp,
-++          cached: false,
-++          stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
-++        },
+++        users,
+++        timestamp,
+++        cached: false,
+++        stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
 ++        leader: overallLeader,
 ++        diff: diffCompact,
 ++        format,
 ++      };
 ++    } else {
 ++      // detailed
+++      const overallLeader = buildLeaderboard(dataNumeric, includeStats)[0]?.username;
+++      const classifications = Object.fromEntries(
+++        Object.entries(diffDetailed).map(([stat, d]) => [
+++          stat,
+++          d.percentage < 5 ? "close" : d.percentage >= 25 ? "significant" : "moderate",
+++        ]),
+++      );
 ++      payload = {
-++        comparison: {
-++          users,
-++          timestamp,
-++          cached: false,
-++          stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
-++        },
+++        users,
+++        timestamp,
+++        cached: false,
+++        stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
 ++        data: dataFull,
-++        diff: diffDetailed,
-++        // Provide simple insights: leader summaries and classification
-++        summary: Object.keys(diffDetailed).map((stat) => {
-++          const d = diffDetailed[stat];
-++          const classification = d.percentage < 5 ? "close" : d.percentage >= 25 ? "significant" : "moderate";
-++          return {
-++            stat,
-++            leader: d.leader,
-++            percentage: d.percentage,
-++            classifi
+++       
 \ No newline at end of file

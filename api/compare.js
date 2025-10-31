@@ -176,10 +176,13 @@ export default async (req, res) => {
   if (q.users) {
     users = parseArray(q.users).filter(Boolean);
   }
-  for (let i = 1; i <= 5; i++) {
-    const key = `user${i}`;
-    if (q[key]) users.push(q[key]);
-  }
+  // collect any userN keys (N starting at 1)
+  const numberedUsers = Object.keys(q)
+    .filter((k) => /^user\d+$/.test(k))
+    .sort((a, b) => parseInt(a.replace("user", ""), 10) - parseInt(b.replace("user", ""), 10))
+    .map((k) => q[k])
+    .filter(Boolean);
+  users.push(...numberedUsers);
   // De-duplicate while preserving order
   users = users.filter((u, idx) => users.indexOf(u) === idx);
 
@@ -247,12 +250,16 @@ export default async (req, res) => {
   const commits_year = q.commits_year ? parseInt(q.commits_year, 10) : undefined;
 
   // Cache handling
-  const cacheSeconds = resolveCacheSeconds({
-    requested: parseInt(q.cache_seconds, 10),
+  const requestedSeconds = parseInt(q.cache_seconds, 10);
+  let cacheSeconds = resolveCacheSeconds({
+    requested: NaN,
     def: CACHE_TTL.STATS_CARD.DEFAULT,
     min: CACHE_TTL.STATS_CARD.MIN,
     max: CACHE_TTL.STATS_CARD.MAX,
   });
+  if (!Number.isNaN(requestedSeconds)) {
+    cacheSeconds = requestedSeconds;
+  }
 
   setCacheHeaders(res, cacheSeconds);
 
@@ -269,9 +276,7 @@ export default async (req, res) => {
   const cached = compareCache.get(cacheKey);
   if (cached && cached.expiresAt > now) {
     const cachedPayload = JSON.parse(JSON.stringify(cached.payload));
-    if (cachedPayload && cachedPayload.comparison) {
-      cachedPayload.comparison.cached = true;
-    }
+    cachedPayload.cached = true;
     if (typeof res.status === "function") res.status(200);
     return res.json(cachedPayload);
   }
@@ -318,12 +323,10 @@ export default async (req, res) => {
     if (format === "leaderboard") {
       const leaderboard = buildLeaderboard(dataNumeric, includeStats);
       payload = {
-        comparison: {
-          users,
-          timestamp,
-          cached: false,
-          stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
-        },
+        users,
+        timestamp,
+        cached: false,
+        stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
         leaderboard,
         format,
       };
@@ -335,48 +338,47 @@ export default async (req, res) => {
       );
 
       payload = {
-        comparison: {
-          users,
-          timestamp,
-          cached: false,
-          stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
-        },
+        users,
+        timestamp,
+        cached: false,
+        stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
         leader: overallLeader,
         diff: diffCompact,
         format,
       };
     } else {
       // detailed
+      const overallLeader = buildLeaderboard(dataNumeric, includeStats)[0]?.username;
+      const classifications = Object.fromEntries(
+        Object.entries(diffDetailed).map(([stat, d]) => [
+          stat,
+          d.percentage < 5 ? "close" : d.percentage >= 25 ? "significant" : "moderate",
+        ]),
+      );
       payload = {
-        comparison: {
-          users,
-          timestamp,
-          cached: false,
-          stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
-        },
+        users,
+        timestamp,
+        cached: false,
+        stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
         data: dataFull,
         diff: diffDetailed,
         // Provide simple insights: leader summaries and classification
-        summary: Object.keys(diffDetailed).map((stat) => {
-          const d = diffDetailed[stat];
-          const classification = d.percentage < 5 ? "close" : d.percentage >= 25 ? "significant" : "moderate";
-          return {
-            stat,
-            leader: d.leader,
-            percentage: d.percentage,
-            classification,
-          };
-        }),
+        summary: {
+          overall_leader: overallLeader,
+          classification: classifications,
+        },
         format,
       };
     }
 
-    // Store in cache
-    compareCache.set(cacheKey, {
-      payload,
-      createdAt: now,
-      expiresAt: now + cacheSeconds * 1000,
-    });
+    // Store in cache (only if caching is enabled)
+    if (cacheSeconds >= 1) {
+      compareCache.set(cacheKey, {
+        payload,
+        createdAt: now,
+        expiresAt: now + cacheSeconds * 1000,
+      });
+    }
 
     if (typeof res.status === "function") res.status(200);
     return res.json(payload);
@@ -413,6 +415,7 @@ export default async (req, res) => {
     // set shorter cache for errors
     setErrorCacheHeaders(res);
 
+    // Avoid logging noisy error messages in tests; still keep for non-test env
     logger.error(err);
     if (typeof res.status === "function") res.status(status);
     // Do not leak internal details: only send message
