@@ -276,7 +276,11 @@ export default async (req, res) => {
   const cached = compareCache.get(cacheKey);
   if (cached && cached.expiresAt > now) {
     const cachedPayload = JSON.parse(JSON.stringify(cached.payload));
-    cachedPayload.cached = true;
+    if (cachedPayload && cachedPayload.comparison) {
+      cachedPayload.comparison.cached = true;
+    } else {
+      cachedPayload.cached = true;
+    }
     if (typeof res.status === "function") res.status(200);
     return res.json(cachedPayload);
   }
