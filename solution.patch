@@ -1,9 +1,9 @@
 diff --git a/api/compare.js b/api/compare.js
 new file mode 100644
-index 0000000..4d0cd1b
+index 0000000..84c0c95
 --- /dev/null
 +++ b/api/compare.js
-@@ -0,0 +1,424 @@
+@@ -0,0 +1,428 @@
 +// @ts-check
 +
 +import { parseArray, parseBoolean } from "../src/common/ops.js";
@@ -282,7 +282,11 @@ index 0000000..4d0cd1b
 +  const cached = compareCache.get(cacheKey);
 +  if (cached && cached.expiresAt > now) {
 +    const cachedPayload = JSON.parse(JSON.stringify(cached.payload));
-+    cachedPayload.cached = true;
++    if (cachedPayload && cachedPayload.comparison) {
++      cachedPayload.comparison.cached = true;
++    } else {
++      cachedPayload.cached = true;
++    }
 +    if (typeof res.status === "function") res.status(200);
 +    return res.json(cachedPayload);
 +  }
@@ -430,16 +434,16 @@ index 0000000..4d0cd1b
 +};
 diff --git a/solution.patch b/solution.patch
 new file mode 100644
-index 0000000..e3e57a9
+index 0000000..1997d36
 --- /dev/null
 +++ b/solution.patch
-@@ -0,0 +1,370 @@
+@@ -0,0 +1,372 @@
 +diff --git a/api/compare.js b/api/compare.js
 +new file mode 100644
-+index 0000000..4d0cd1b
++index 0000000..84c0c95
 +--- /dev/null
 ++++ b/api/compare.js
-+@@ -0,0 +1,424 @@
++@@ -0,0 +1,428 @@
 ++// @ts-check
 ++
 ++import { parseArray, parseBoolean } from "../src/common/ops.js";
@@ -718,7 +722,11 @@ index 0000000..e3e57a9
 ++  const cached = compareCache.get(cacheKey);
 ++  if (cached && cached.expiresAt > now) {
 ++    const cachedPayload = JSON.parse(JSON.stringify(cached.payload));
-++    cachedPayload.cached = true;
+++    if (cachedPayload && cachedPayload.comparison) {
+++      cachedPayload.comparison.cached = true;
+++    } else {
+++      cachedPayload.cached = true;
+++    }
 ++    if (typeof res.status === "function") res.status(200);
 ++    return res.json(cachedPayload);
 ++  }
@@ -801,7 +809,5 @@ index 0000000..e3e57a9
 ++        users,
 ++        timestamp,
 ++        cached: false,
-++        stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
-++        data: dataFull,
-++       
+++ 
 \ No newline at end of file
