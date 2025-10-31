@@ -313,7 +313,12 @@ export default async (req, res) => {
     const dataFull = {};
     /** @type {Record<string, Record<string, number>>} */
     const dataNumeric = {};
+
     for (const r of results) {
+      // basic validation: ensure essential numeric fields exist
+      if (!r?.stats || typeof r.stats.totalStars !== "number") {
+        throw new Error("fetcher error");
+      }
       dataFull[r.username] = r.stats;
       dataNumeric[r.username] = pickNumericStats(r.stats);
     }
@@ -327,10 +332,12 @@ export default async (req, res) => {
     if (format === "leaderboard") {
       const leaderboard = buildLeaderboard(dataNumeric, includeStats);
       payload = {
-        users,
-        timestamp,
-        cached: false,
-        stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
+        comparison: {
+          users,
+          timestamp,
+          cached: false,
+          stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
+        },
         leaderboard,
         format,
       };
@@ -342,10 +349,12 @@ export default async (req, res) => {
       );
 
       payload = {
-        users,
-        timestamp,
-        cached: false,
-        stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
+        comparison: {
+          users,
+          timestamp,
+          cached: false,
+          stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
+        },
         leader: overallLeader,
         diff: diffCompact,
         format,
@@ -360,10 +369,12 @@ export default async (req, res) => {
         ]),
       );
       payload = {
-        users,
-        timestamp,
-        cached: false,
-        stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
+        comparison: {
+          users,
+          timestamp,
+          cached: false,
+          stats_compared: includeStats && includeStats.length ? includeStats : NUMERIC_STATS,
+        },
         data: dataFull,
         diff: diffDetailed,
         // Provide simple insights: leader summaries and classification
