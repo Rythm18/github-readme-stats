@@ -1,0 +1,229 @@
+diff --git a/readme.md b/readme.md
+index 78fe9ae..520e780 100644
+--- a/readme.md
++++ b/readme.md
+@@ -904,6 +904,11 @@ GitHub Readme Stats provides several environment variables that can be used to c
+       <td>Sets the cache duration in seconds for the generated cards. This variable takes precedence over the default cache timings for the public instance. If this variable is not set, the default cache duration is 24 hours (86,400 seconds).</td>
+       <td>Any positive integer or <code>0</code> to disable caching</td>
+     </tr>
++    <tr>
++      <td><code>GITHUB_RESPONSE_CACHE_SECONDS</code></td>
++      <td>Configures how long successful GitHub API responses are kept in the in-memory cache before a fresh request is made. If this variable is not set the cache defaults to 300 seconds (disabled only in test environments).</td>
++      <td>Any positive integer between 1 and 86,400 seconds or <code>0</code> to disable caching</td>
++    </tr>
+     <tr>
+       <td><code>WHITELIST</code></td>
+       <td>A comma-separated list of GitHub usernames that are allowed to access your instance. If this variable is not set, all usernames are allowed.</td>
+diff --git a/src/common/github-cache.js b/src/common/github-cache.js
+new file mode 100644
+index 0000000..0d5c2c1
+--- /dev/null
++++ b/src/common/github-cache.js
+@@ -0,0 +1,162 @@
++// @ts-check
++
++import { clampValue } from "./ops.js";
++
++const DEFAULT_TTL_SECONDS = 300; // 5 minutes
++const MIN_TTL_SECONDS = 1;
++const MAX_TTL_SECONDS = 86400; // 24 hours
++
++/**
++ * Internal store for cached GitHub responses keyed by fetcher + variables.
++ * @type {Map<Function, Map<string, { value: any, expiresAt: number }>>}
++ */
++const cacheStore = new Map();
++
++/**
++ * Compute the effective TTL in seconds based on environment configuration.
++ *  - Undefined env -> default TTL.
++ *  - Non-numeric env -> default TTL.
++ *  - Values <= 0 -> disables caching.
++ *  - Otherwise clamp between MIN_TTL_SECONDS and MAX_TTL_SECONDS.
++ *
++ * @returns {number} Effective TTL in seconds. 0 means disabled.
++ */
++const getGitHubCacheTTL = () => {
++  const raw = process.env.GITHUB_RESPONSE_CACHE_SECONDS;
++  if (raw === undefined || raw === "") {
++    return process.env.NODE_ENV === "test" ? 0 : DEFAULT_TTL_SECONDS;
++  }
++
++  const parsed = parseInt(raw, 10);
++  if (Number.isNaN(parsed)) {
++    return DEFAULT_TTL_SECONDS;
++  }
++
++  if (parsed <= 0) {
++    return 0;
++  }
++
++  return clampValue(parsed, MIN_TTL_SECONDS, MAX_TTL_SECONDS);
++};
++
++/**
++ * Serialize variables into a deterministic cache key.
++ *
++ * @param {any} value Value to serialize.
++ * @returns {string} Serialized key.
++ */
++const serialize = (value) => {
++  if (value === null || value === undefined) {
++    return String(value);
++  }
++
++  const type = typeof value;
++  if (type === "string") {
++    return `s:${value}`;
++  }
++  if (type === "number" || type === "bigint") {
++    return `n:${value}`;
++  }
++  if (type === "boolean") {
++    return `b:${value}`;
++  }
++  if (Array.isArray(value)) {
++    return `a:[${value.map(serialize).join(",")}]`;
++  }
++
++  if (value instanceof Date) {
++    return `d:${value.toISOString()}`;
++  }
++
++  // Objects
++  const keys = Object.keys(value).sort();
++  const entries = keys.map((key) => `${serialize(key)}=>${serialize(value[key])}`);
++  return `o:{${entries.join(",")}}`;
++};
++
++/**
++ * Build a composite cache key for the fetcher and variables.
++ *
++ * @param {Function} fetcher Fetcher reference.
++ * @param {any} variables Variables passed to fetcher.
++ * @returns {string}
++ */
++const buildCacheKey = (fetcher, variables) => {
++  const id = fetcher.name || "anonymous";
++  return `${id}|${serialize(variables)}`;
++};
++
++/**
++ * Retrieve a cached response if present and still valid.
++ *
++ * @param {Function} fetcher Fetcher reference.
++ * @param {any} variables Fetcher variables.
++ * @param {number} now Current timestamp in milliseconds.
++ * @returns {any|null}
++ */
++const getCachedGitHubResponse = (fetcher, variables, now = Date.now()) => {
++  const ttl = getGitHubCacheTTL();
++  if (ttl <= 0) {
++    return null;
++  }
++
++  const fetcherCache = cacheStore.get(fetcher);
++  if (!fetcherCache) {
++    return null;
++  }
++
++  const key = buildCacheKey(fetcher, variables);
++  const entry = fetcherCache.get(key);
++  if (!entry) {
++    return null;
++  }
++
++  if (entry.expiresAt <= now) {
++    fetcherCache.delete(key);
++    return null;
++  }
++
++  return entry.value;
++};
++
++/**
++ * Persist a response in the cache store respecting the configured TTL.
++ *
++ * @param {Function} fetcher Fetcher reference.
++ * @param {any} variables Fetcher variables.
++ * @param {any} value Response value to cache.
++ * @param {number} now Current timestamp in milliseconds.
++ */
++const setCachedGitHubResponse = (fetcher, variables, value, now = Date.now()) => {
++  const ttl = getGitHubCacheTTL();
++  if (ttl <= 0) {
++    return;
++  }
++
++  let fetcherCache = cacheStore.get(fetcher);
++  if (!fetcherCache) {
++    fetcherCache = new Map();
++    cacheStore.set(fetcher, fetcherCache);
++  }
++
++  const key = buildCacheKey(fetcher, variables);
++  const expiresAt = now + ttl * 1000;
++  fetcherCache.set(key, { value, expiresAt });
++};
++
++/**
++ * Clear all cached GitHub responses.
++ */
++const clearGitHubResponseCache = () => {
++  cacheStore.clear();
++};
++
++export {
++  getGitHubCacheTTL,
++  getCachedGitHubResponse,
++  setCachedGitHubResponse,
++  clearGitHubResponseCache,
++  DEFAULT_TTL_SECONDS,
++  MIN_TTL_SECONDS,
++  MAX_TTL_SECONDS,
++};
+diff --git a/src/common/retryer.js b/src/common/retryer.js
+index 6703415..b82dee3 100644
+--- a/src/common/retryer.js
++++ b/src/common/retryer.js
+@@ -2,6 +2,10 @@
+ 
+ import { CustomError } from "./error.js";
+ import { logger } from "./log.js";
++import {
++  getCachedGitHubResponse,
++  setCachedGitHubResponse,
++} from "./github-cache.js";
+ 
+ // Script variables.
+ 
+@@ -25,6 +29,11 @@ const RETRIES = process.env.NODE_ENV === "test" ? 7 : PATs;
+  * @returns {Promise<any>} The response from the fetcher function.
+  */
+ const retryer = async (fetcher, variables, retries = 0) => {
++  const cached = getCachedGitHubResponse(fetcher, variables);
++  if (cached) {
++    return cached;
++  }
++
+   if (!RETRIES) {
+     throw new CustomError("No GitHub API tokens found", CustomError.NO_TOKENS);
+   }
+@@ -63,6 +72,17 @@ const retryer = async (fetcher, variables, retries = 0) => {
+       return retryer(fetcher, variables, retries);
+     }
+ 
++    const hasGraphQLErrors = Array.isArray(response?.data?.errors)
++      ? response.data.errors.length > 0
++      : false;
++    const isSuccessfulStatus =
++      response?.status === undefined ||
++      (response.status >= 200 && response.status < 400);
++
++    if (isSuccessfulStatus && !hasGraphQLErrors) {
++      setCachedGitHubResponse(fetcher, variables, response);
++    }
++
+     // finally return the response
+     return response;
+   } catch (err) {
