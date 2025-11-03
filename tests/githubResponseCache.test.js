@@ -3,8 +3,6 @@
 import { afterEach, beforeEach, describe, expect, it, jest } from "@jest/globals";
 import {
   clearGitHubResponseCache,
-  DEFAULT_TTL_SECONDS,
-  MAX_TTL_SECONDS,
   getGitHubCacheTTL,
 } from "../src/common/github-cache.js";
 import { retryer } from "../src/common/retryer.js";
@@ -83,7 +81,7 @@ describe("GitHub response caching", () => {
   });
 
   it("does not cache GraphQL error payloads", async () => {
-    process.env.GITHUB_RESPONSE_CACHE_SECONDS = `${DEFAULT_TTL_SECONDS}`;
+    process.env.GITHUB_RESPONSE_CACHE_SECONDS = "300";
     const fetcher = jest
       .fn()
       .mockResolvedValueOnce({
@@ -103,18 +101,25 @@ describe("GitHub response caching", () => {
     expect(second.data).toEqual({ data: { viewer: { login: "octocat" } } });
   });
 
-  it("falls back to default TTL when unset outside test env", () => {
+  it("falls back to the documented default TTL when unset outside test env", () => {
     process.env.NODE_ENV = "production";
     delete process.env.GITHUB_RESPONSE_CACHE_SECONDS;
 
-    expect(getGitHubCacheTTL()).toBe(DEFAULT_TTL_SECONDS);
+    expect(getGitHubCacheTTL()).toBe(300);
+  });
+
+  it("clamps cache seconds to the documented minimum", () => {
+    process.env.NODE_ENV = "production";
+    process.env.GITHUB_RESPONSE_CACHE_SECONDS = "1";
+
+    expect(getGitHubCacheTTL()).toBe(1);
   });
 
   it("clamps cache seconds to the documented maximum", () => {
     process.env.NODE_ENV = "production";
     process.env.GITHUB_RESPONSE_CACHE_SECONDS = "999999";
 
-    expect(getGitHubCacheTTL()).toBe(MAX_TTL_SECONDS);
+    expect(getGitHubCacheTTL()).toBe(86400);
   });
 
   it("does not cache non-successful HTTP responses", async () => {
