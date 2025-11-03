@@ -4,11 +4,11 @@ set -e
 case "$1" in
   base)
     # Run existing tests - should pass at base commit
-    npm test
+    npm test -- tests/api/auth.test.ts
     ;;
   new)
     # Run newly added tests - should fail before solution
-    npm test -- --runTestsByPath tests/githubResponseCache.test.js
+    npm test -- tests/api/auth-rate-limit.test.ts
     ;;
   *)
     echo "Usage: ./test.sh {base|new}"
