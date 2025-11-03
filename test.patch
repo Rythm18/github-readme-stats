@@ -1,141 +1,41 @@
 diff --git a/test.sh b/test.sh
-new file mode 100755
-index 0000000..97a2426
---- /dev/null
+index 97a2426..9f09d29 100755
+--- a/test.sh
 +++ b/test.sh
-@@ -0,0 +1,30 @@
-+#!/usr/bin/env bash
-+
-+set -euo pipefail
-+
-+usage() {
-+  cat <<'USAGE'
-+Usage: ./test.sh <base|new>
-+
-+  base  Run the full baseline test suite
-+  new   Run only the new caching tests
-+USAGE
-+}
-+
-+if [[ $# -ne 1 ]]; then
-+  usage
-+  exit 1
-+fi
-+
-+case "$1" in
-+  base)
-+    npm test
-+    ;;
-+  new)
-+    npx jest --runTestsByPath tests/githubResponseCache.test.js
-+    ;;
-+  *)
-+    usage
-+    exit 1
-+    ;;
-+esac
-diff --git a/tests/githubResponseCache.test.js b/tests/githubResponseCache.test.js
-new file mode 100644
-index 0000000..028b976
---- /dev/null
-+++ b/tests/githubResponseCache.test.js
-@@ -0,0 +1,99 @@
-+// @ts-check
-+
-+import { afterEach, beforeEach, describe, expect, it, jest } from "@jest/globals";
-+import {
-+  clearGitHubResponseCache,
-+  DEFAULT_TTL_SECONDS,
-+} from "../src/common/github-cache.js";
-+import { retryer } from "../src/common/retryer.js";
-+
-+const ORIGINAL_ENV = process.env.GITHUB_RESPONSE_CACHE_SECONDS;
-+
-+describe("GitHub response caching", () => {
-+  beforeEach(() => {
-+    clearGitHubResponseCache();
-+    delete process.env.GITHUB_RESPONSE_CACHE_SECONDS;
-+    jest.useRealTimers();
-+  });
-+
-+  afterEach(() => {
-+    clearGitHubResponseCache();
-+
-+    if (ORIGINAL_ENV === undefined) {
-+      delete process.env.GITHUB_RESPONSE_CACHE_SECONDS;
-+    } else {
-+      process.env.GITHUB_RESPONSE_CACHE_SECONDS = ORIGINAL_ENV;
-+    }
-+    jest.useRealTimers();
-+  });
-+
-+  it("reuses cached response for identical requests within the TTL", async () => {
-+    process.env.GITHUB_RESPONSE_CACHE_SECONDS = "120";
-+    const fetcher = jest.fn(() =>
-+      Promise.resolve({
-+        status: 200,
-+        data: { data: { viewer: { login: "octocat" } } },
-+      }),
-+    );
-+
-+    const first = await retryer(fetcher, { login: "octocat" });
-+    const second = await retryer(fetcher, { login: "octocat" });
-+
-+    expect(fetcher).toHaveBeenCalledTimes(1);
-+    expect(second).toBe(first);
-+  });
-+
-+  it("does not cache responses when disabled via environment variable", async () => {
-+    process.env.GITHUB_RESPONSE_CACHE_SECONDS = "0";
-+    const fetcher = jest.fn(() =>
-+      Promise.resolve({
-+        status: 200,
-+        data: { data: { viewer: { login: "octocat" } } },
-+      }),
-+    );
-+
-+    await retryer(fetcher, { login: "octocat" });
-+    await retryer(fetcher, { login: "octocat" });
-+
-+    expect(fetcher).toHaveBeenCalledTimes(2);
-+  });
-+
-+  it("expires cached responses after the configured TTL", async () => {
-+    process.env.GITHUB_RESPONSE_CACHE_SECONDS = "1";
-+    jest.useFakeTimers({ doNotFake: ["nextTick", "setImmediate"] });
-+    const fetcher = jest.fn(() =>
-+      Promise.resolve({
-+        status: 200,
-+        data: { data: { viewer: { login: "octocat" } } },
-+      }),
-+    );
-+
-+    await retryer(fetcher, { login: "octocat" });
-+    jest.advanceTimersByTime(500);
-+    await retryer(fetcher, { login: "octocat" });
-+    jest.advanceTimersByTime(600);
-+    await retryer(fetcher, { login: "octocat" });
-+
-+    expect(fetcher).toHaveBeenCalledTimes(2);
-+  });
-+
-+  it("does not cache GraphQL error payloads", async () => {
-+    process.env.GITHUB_RESPONSE_CACHE_SECONDS = `${DEFAULT_TTL_SECONDS}`;
-+    const fetcher = jest
-+      .fn()
-+      .mockResolvedValueOnce({
-+        status: 200,
-+        data: { errors: [{ message: "Oops" }] },
-+      })
-+      .mockResolvedValueOnce({
-+        status: 200,
-+        data: { data: { viewer: { login: "octocat" } } },
-+      });
-+
-+    const first = await retryer(fetcher, { login: "octocat" });
-+    const second = await retryer(fetcher, { login: "octocat" });
-+
-+    expect(fetcher).toHaveBeenCalledTimes(2);
-+    expect(first).not.toBe(second);
-+  });
-+});
+@@ -1,30 +1,17 @@
+-#!/usr/bin/env bash
+-
+-set -euo pipefail
+-
+-usage() {
+-  cat <<'USAGE'
+-Usage: ./test.sh <base|new>
+-
+-  base  Run the full baseline test suite
+-  new   Run only the new caching tests
+-USAGE
+-}
+-
+-if [[ $# -ne 1 ]]; then
+-  usage
+-  exit 1
+-fi
++#!/bin/bash
++set -e
+ 
+ case "$1" in
+   base)
++    # Run existing tests - should pass at base commit
+     npm test
+     ;;
+   new)
+-    npx jest --runTestsByPath tests/githubResponseCache.test.js
++    # Run newly added tests - should fail before solution
++    npm test -- --runTestsByPath tests/githubResponseCache.test.js
+     ;;
+   *)
+-    usage
++    echo "Usage: ./test.sh {base|new}"
+     exit 1
+     ;;
+ esac

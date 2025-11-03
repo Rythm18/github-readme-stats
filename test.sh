@@ -1,30 +1,17 @@
-#!/usr/bin/env bash
-
-set -euo pipefail
-
-usage() {
-  cat <<'USAGE'
-Usage: ./test.sh <base|new>
-
-  base  Run the full baseline test suite
-  new   Run only the new caching tests
-USAGE
-}
-
-if [[ $# -ne 1 ]]; then
-  usage
-  exit 1
-fi
+#!/bin/bash
+set -e
 
 case "$1" in
   base)
+    # Run existing tests - should pass at base commit
     npm test
     ;;
   new)
-    npx jest --runTestsByPath tests/githubResponseCache.test.js
+    # Run newly added tests - should fail before solution
+    npm test -- --runTestsByPath tests/githubResponseCache.test.js
     ;;
   *)
-    usage
+    echo "Usage: ./test.sh {base|new}"
     exit 1
     ;;
 esac
