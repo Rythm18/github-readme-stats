@@ -1,83 +1,81 @@
 diff --git a/test.sh b/test.sh
-new file mode 100755
-index 0000000..9f09d29
---- /dev/null
+index 9f09d29..f595204 100755
+--- a/test.sh
 +++ b/test.sh
-@@ -0,0 +1,17 @@
-+#!/bin/bash
-+set -e
-+
-+case "$1" in
-+  base)
-+    # Run existing tests - should pass at base commit
-+    npm test
-+    ;;
-+  new)
-+    # Run newly added tests - should fail before solution
-+    npm test -- --runTestsByPath tests/githubResponseCache.test.js
-+    ;;
-+  *)
-+    echo "Usage: ./test.sh {base|new}"
-+    exit 1
-+    ;;
-+esac
+@@ -4,7 +4,7 @@ set -e
+ case "$1" in
+   base)
+     # Run existing tests - should pass at base commit
+-    npm test
++    npm test -- --testPathIgnorePatterns=githubResponseCache.test.js
+     ;;
+   new)
+     # Run newly added tests - should fail before solution
 diff --git a/tests/githubResponseCache.test.js b/tests/githubResponseCache.test.js
-new file mode 100644
-index 0000000..028b976
---- /dev/null
+index 028b976..168ee36 100644
+--- a/tests/githubResponseCache.test.js
 +++ b/tests/githubResponseCache.test.js
-@@ -0,0 +1,99 @@
-+// @ts-check
+@@ -4,10 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, jest } from "@jest/globals
+ import {
+   clearGitHubResponseCache,
+   DEFAULT_TTL_SECONDS,
++  MAX_TTL_SECONDS,
++  getGitHubCacheTTL,
+ } from "../src/common/github-cache.js";
+ import { retryer } from "../src/common/retryer.js";
+ 
+ const ORIGINAL_ENV = process.env.GITHUB_RESPONSE_CACHE_SECONDS;
++const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
+ 
+ describe("GitHub response caching", () => {
+   beforeEach(() => {
+@@ -24,6 +27,7 @@ describe("GitHub response caching", () => {
+     } else {
+       process.env.GITHUB_RESPONSE_CACHE_SECONDS = ORIGINAL_ENV;
+     }
++    process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+     jest.useRealTimers();
+   });
+ 
+@@ -40,7 +44,8 @@ describe("GitHub response caching", () => {
+     const second = await retryer(fetcher, { login: "octocat" });
+ 
+     expect(fetcher).toHaveBeenCalledTimes(1);
+-    expect(second).toBe(first);
++    expect(first.data).toEqual({ data: { viewer: { login: "octocat" } } });
++    expect(second.data).toEqual({ data: { viewer: { login: "octocat" } } });
+   });
+ 
+   it("does not cache responses when disabled via environment variable", async () => {
+@@ -94,6 +99,58 @@ describe("GitHub response caching", () => {
+     const second = await retryer(fetcher, { login: "octocat" });
+ 
+     expect(fetcher).toHaveBeenCalledTimes(2);
+-    expect(first).not.toBe(second);
++    expect(first.data).toEqual({ errors: [{ message: "Oops" }] });
++    expect(second.data).toEqual({ data: { viewer: { login: "octocat" } } });
++  });
 +
-+import { afterEach, beforeEach, describe, expect, it, jest } from "@jest/globals";
-+import {
-+  clearGitHubResponseCache,
-+  DEFAULT_TTL_SECONDS,
-+} from "../src/common/github-cache.js";
-+import { retryer } from "../src/common/retryer.js";
-+
-+const ORIGINAL_ENV = process.env.GITHUB_RESPONSE_CACHE_SECONDS;
-+
-+describe("GitHub response caching", () => {
-+  beforeEach(() => {
-+    clearGitHubResponseCache();
++  it("falls back to default TTL when unset outside test env", () => {
++    process.env.NODE_ENV = "production";
 +    delete process.env.GITHUB_RESPONSE_CACHE_SECONDS;
-+    jest.useRealTimers();
++
++    expect(getGitHubCacheTTL()).toBe(DEFAULT_TTL_SECONDS);
 +  });
 +
-+  afterEach(() => {
-+    clearGitHubResponseCache();
++  it("clamps cache seconds to the documented maximum", () => {
++    process.env.NODE_ENV = "production";
++    process.env.GITHUB_RESPONSE_CACHE_SECONDS = "999999";
 +
-+    if (ORIGINAL_ENV === undefined) {
-+      delete process.env.GITHUB_RESPONSE_CACHE_SECONDS;
-+    } else {
-+      process.env.GITHUB_RESPONSE_CACHE_SECONDS = ORIGINAL_ENV;
-+    }
-+    jest.useRealTimers();
++    expect(getGitHubCacheTTL()).toBe(MAX_TTL_SECONDS);
 +  });
 +
-+  it("reuses cached response for identical requests within the TTL", async () => {
++  it("does not cache non-successful HTTP responses", async () => {
 +    process.env.GITHUB_RESPONSE_CACHE_SECONDS = "120";
 +    const fetcher = jest.fn(() =>
 +      Promise.resolve({
-+        status: 200,
-+        data: { data: { viewer: { login: "octocat" } } },
-+      }),
-+    );
-+
-+    const first = await retryer(fetcher, { login: "octocat" });
-+    const second = await retryer(fetcher, { login: "octocat" });
-+
-+    expect(fetcher).toHaveBeenCalledTimes(1);
-+    expect(second).toBe(first);
-+  });
-+
-+  it("does not cache responses when disabled via environment variable", async () => {
-+    process.env.GITHUB_RESPONSE_CACHE_SECONDS = "0";
-+    const fetcher = jest.fn(() =>
-+      Promise.resolve({
-+        status: 200,
-+        data: { data: { viewer: { login: "octocat" } } },
++        status: 500,
++        data: { message: "something went wrong" },
 +      }),
 +    );
 +
@@ -87,42 +85,25 @@ index 0000000..028b976
 +    expect(fetcher).toHaveBeenCalledTimes(2);
 +  });
 +
-+  it("expires cached responses after the configured TTL", async () => {
-+    process.env.GITHUB_RESPONSE_CACHE_SECONDS = "1";
-+    jest.useFakeTimers({ doNotFake: ["nextTick", "setImmediate"] });
-+    const fetcher = jest.fn(() =>
-+      Promise.resolve({
-+        status: 200,
-+        data: { data: { viewer: { login: "octocat" } } },
-+      }),
-+    );
-+
-+    await retryer(fetcher, { login: "octocat" });
-+    jest.advanceTimersByTime(500);
-+    await retryer(fetcher, { login: "octocat" });
-+    jest.advanceTimersByTime(600);
-+    await retryer(fetcher, { login: "octocat" });
-+
-+    expect(fetcher).toHaveBeenCalledTimes(2);
-+  });
-+
-+  it("does not cache GraphQL error payloads", async () => {
-+    process.env.GITHUB_RESPONSE_CACHE_SECONDS = `${DEFAULT_TTL_SECONDS}`;
++  it("caches the eventual success after a rate limit response", async () => {
++    process.env.GITHUB_RESPONSE_CACHE_SECONDS = "120";
++    const successResponse = {
++      status: 200,
++      data: { data: { viewer: { login: "octocat" } } },
++    };
 +    const fetcher = jest
 +      .fn()
 +      .mockResolvedValueOnce({
 +        status: 200,
-+        data: { errors: [{ message: "Oops" }] },
++        data: { errors: [{ type: "RATE_LIMITED" }] },
 +      })
-+      .mockResolvedValueOnce({
-+        status: 200,
-+        data: { data: { viewer: { login: "octocat" } } },
-+      });
++      .mockResolvedValueOnce(successResponse);
 +
 +    const first = await retryer(fetcher, { login: "octocat" });
 +    const second = await retryer(fetcher, { login: "octocat" });
 +
 +    expect(fetcher).toHaveBeenCalledTimes(2);
-+    expect(first).not.toBe(second);
-+  });
-+});
++    expect(first.data).toEqual(successResponse.data);
++    expect(second.data).toEqual(successResponse.data);
+   });
+ });
