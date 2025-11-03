@@ -2,6 +2,10 @@
 
 import { CustomError } from "./error.js";
 import { logger } from "./log.js";
+import {
+  getCachedGitHubResponse,
+  setCachedGitHubResponse,
+} from "./github-cache.js";
 
 // Script variables.
 
@@ -25,6 +29,11 @@ const RETRIES = process.env.NODE_ENV === "test" ? 7 : PATs;
  * @returns {Promise<any>} The response from the fetcher function.
  */
 const retryer = async (fetcher, variables, retries = 0) => {
+  const cached = getCachedGitHubResponse(fetcher, variables);
+  if (cached) {
+    return cached;
+  }
+
   if (!RETRIES) {
     throw new CustomError("No GitHub API tokens found", CustomError.NO_TOKENS);
   }
@@ -61,6 +70,17 @@ const retryer = async (fetcher, variables, retries = 0) => {
       retries++;
       // directly return from the function
       return retryer(fetcher, variables, retries);
+    }
+
+    const hasGraphQLErrors = Array.isArray(response?.data?.errors)
+      ? response.data.errors.length > 0
+      : false;
+    const isSuccessfulStatus =
+      response?.status === undefined ||
+      (response.status >= 200 && response.status < 400);
+
+    if (isSuccessfulStatus && !hasGraphQLErrors) {
+      setCachedGitHubResponse(fetcher, variables, response);
     }
 
     // finally return the response

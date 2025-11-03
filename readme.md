@@ -905,6 +905,11 @@ GitHub Readme Stats provides several environment variables that can be used to c
       <td>Any positive integer or <code>0</code> to disable caching</td>
     </tr>
     <tr>
+      <td><code>GITHUB_RESPONSE_CACHE_SECONDS</code></td>
+      <td>Configures how long successful GitHub API responses are kept in the in-memory cache before a fresh request is made. If this variable is not set the cache defaults to 300 seconds (disabled only in test environments).</td>
+      <td>Any positive integer between 1 and 86,400 seconds or <code>0</code> to disable caching</td>
+    </tr>
+    <tr>
       <td><code>WHITELIST</code></td>
       <td>A comma-separated list of GitHub usernames that are allowed to access your instance. If this variable is not set, all usernames are allowed.</td>
       <td>Comma-separated GitHub usernames</td>
