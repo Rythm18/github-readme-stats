@@ -1,6 +1,6 @@
 diff --git a/test.sh b/test.sh
 new file mode 100755
-index 0000000..8c2f6d1
+index 0000000..d0c8c17
 --- /dev/null
 +++ b/test.sh
 @@ -0,0 +1,16 @@
@@ -10,11 +10,11 @@ index 0000000..8c2f6d1
 +case "$1" in
 +  base)
 +    # Run existing tests - should pass at base commit
-+    npm test -- tests/api/auth.test.ts
++    npm test
 +    ;;
 +  new)
 +    # Run newly added tests - should fail before solution
-+    npm test -- tests/api/auth-rate-limit.test.ts
++    npm test -- --runTestsByPath tests/githubResponseCache.test.js
 +    ;;
 +  *)
 +    echo "Usage: ./test.sh {base|new}"
@@ -126,4 +126,3 @@ index 0000000..8c2f6d1
 ++    expect(first).not.toBe(second);
 ++  });
 ++});
-+EOF
